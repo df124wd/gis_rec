@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>智能选址推荐 - 地图展示</title>
+    <link rel="stylesheet" href="/static/lib/ol/ol.css" />
+    <style>
+      html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+      .wrap { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+      header { padding: 10px 12px; border-bottom: 1px solid #eee; display: flex; gap: 8px; align-items: center; }
+      header input, header select { padding: 6px; border: 1px solid #ddd; border-radius: 6px; }
+      header button { padding: 6px 10px; border: none; background: #1677ff; color: #fff; border-radius: 6px; cursor: pointer; }
+      header button:disabled { background: #9db9ff; cursor: not-allowed; }
+      #map { width: 100%; height: 100%; }
+      .sidebar { position: absolute; right: 12px; top: 60px; width: 300px; max-height: calc(100% - 72px); overflow: auto; background: #fff; border: 1px solid #eee; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.08); padding: 10px; }
+      .item { border-bottom: 1px solid #f0f0f0; padding: 6px 0; }
+      .item:last-child { border-bottom: none; }
+      .score { color: #1677ff; font-weight: 600; }
+      .risk { color: #f5222d; }
+      /* 搜索结果轻微提示样式 */
+      .hint { color: #999; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <input id="requirements" type="text" placeholder="请输入选址需求，例如：天河区20亩工业用地" style="flex:1" />
+        <select id="city">
+          <option value="guangzhou">广州</option>
+        </select>
+        <!-- 文本权重固定为1，移除调节控件 -->
+        <!-- SAFE 权重输入已禁用：仅使用文本相似度 -->
+        <button id="runBtn">生成推荐</button>
+        <input id="placeSearch" type="text" placeholder="搜索地名/地标（如：广州塔）" style="width:240px" />
+        <button id="searchBtn" title="搜索并定位">搜索</button>
+        <span class="hint">搜索采用高德地理编码，可能存在速率限制</span>
+      </header>
+      <div id="map"></div>
+    </div>
+    <div class="sidebar" id="sidebar" hidden>
+      <h3>推荐地块</h3>
+      <div id="list"></div>
+    </div>
+
+    <!-- Import map to resolve bare specifier used by OpenLayers source -->
+    <script type="importmap">
+    {
+      "imports": {
+        "rbush": "/static/lib/rbush/index.js"
+      }
+    }
+    </script>
+
+    <script type="module">
+      import Map from '/static/lib/ol/Map.js';
+      import View from '/static/lib/ol/View.js';
+      import TileLayer from '/static/lib/ol/layer/Tile.js';
+      import VectorLayer from '/static/lib/ol/layer/Vector.js';
+      import XYZ from '/static/lib/ol/source/XYZ.js';
+      import VectorSource from '/static/lib/ol/source/Vector.js';
+      import {fromLonLat} from '/static/lib/ol/proj.js';
+      import Feature from '/static/lib/ol/Feature.js';
+      import Point from '/static/lib/ol/geom/Point.js';
+      import Style from '/static/lib/ol/style/Style.js';
+      import Fill from '/static/lib/ol/style/Fill.js';
+      import Stroke from '/static/lib/ol/style/Stroke.js';
+      import CircleStyle from '/static/lib/ol/style/Circle.js';
+
+      let map = null;
+      let vectorSource = null;
+      let hasMap = false;
+      let searchMarker = null;
+
+      async function initMap() {
+        vectorSource = new VectorSource();
+        let baseLayers = [];
+        try {
+          const base = new TileLayer({ source: new XYZ({ url: '/tiles/vec/{z}/{x}/{y}', crossOrigin: 'anonymous' }) });
+          const labels = new TileLayer({ source: new XYZ({ url: '/tiles/cva/{z}/{x}/{y}', crossOrigin: 'anonymous' }) });
+          baseLayers = [base, labels];
+          const plotLayer = new VectorLayer({
+            source: vectorSource,
+            style: new Style({
+              fill: new Fill({ color: 'rgba(22, 119, 255, 0.25)' }),
+              stroke: new Stroke({ color: '#1677ff', width: 2 })
+            })
+          });
+          map = new Map({
+            target: 'map',
+            layers: [...baseLayers, plotLayer],
+            view: new View({ center: fromLonLat([113.2644, 23.1291]), zoom: 12 })
+          });
+          hasMap = true;
+        } catch (e) {
+          console.warn('地图初始化失败：', e);
+          const tip = document.createElement('div');
+          tip.style.cssText = 'position:absolute;left:12px;top:60px;background:#fffbe6;border:1px solid #ffe58f;color:#ad6800;padding:8px 10px;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.08);';
+          tip.textContent = '地图库加载失败，仍可生成推荐列表；请稍后重试或检查本地库路径。';
+          document.body.appendChild(tip);
+        }
+      }
+      initMap();
+
+      function toFeat(f) {
+        if (!hasMap) return null;
+        const c = (f.geometry && f.geometry.coordinates) || [0, 0];
+        const feat = new Feature({
+          geometry: new Point(fromLonLat([c[0], c[1]])),
+          properties: f.properties || {}
+        });
+        feat.setStyle(new Style({
+          image: new CircleStyle({ radius: 6, fill: new Fill({ color: '#1677ff' }), stroke: new Stroke({ color: '#fff', width: 2 }) })
+        }));
+        return feat;
+      }
+
+      function renderList(sites) {
+        const list = document.getElementById('list');
+        list.innerHTML = '';
+        // 兼容后端返回的两种结构：数组或以序号为键的对象
+        // 为了确保与后端推荐顺序一致，不再按分数排序；
+        // 如果是对象结构，则按键的数字序排序（1,2,3...）。
+        const arr = Array.isArray(sites)
+          ? sites
+          : Object.keys(sites || {})
+              .sort((a, b) => {
+                const an = Number(a), bn = Number(b);
+                if (!Number.isNaN(an) && !Number.isNaN(bn)) return an - bn;
+                return String(a).localeCompare(String(b));
+              })
+              .map(k => sites[k]);
+        arr.forEach((s, i) => {
+          const d = document.createElement('div');
+          d.className = 'item';
+          const adv = Array.isArray(s.advantages) ? s.advantages.join('、') : (s.advantages || '');
+          const risks = Array.isArray(s.risks) ? s.risks.join('、') : (s.risks || '');
+          d.innerHTML = `<div><strong>${i+1}. ${s.name || '未命名'}</strong></div>
+            <div>坐标: ${(+s.lon || 0).toFixed(6)}, ${(+s.lat || 0).toFixed(6)}</div>
+            <div>优势: ${adv}</div>
+            <div>风险: ${risks}</div>`;
+          d.onclick = () => { if (hasMap) { map.getView().animate({ center: fromLonLat([+s.lon, +s.lat]), zoom: 14, duration: 400 }); } };
+          list.appendChild(d);
+        });
+        document.getElementById('sidebar').hidden = false;
+      }
+
+      async function run() {
+        const btn = document.getElementById('runBtn');
+        btn.disabled = true; btn.textContent = '生成中...';
+        if (hasMap) vectorSource.clear();
+
+        const payload = {
+          requirements: document.getElementById('requirements').value,
+          city: document.getElementById('city').value,
+          top_k: 10,
+          type: 'zh'
+        };
+
+        try {
+          const resp = await fetch('/api/recommendations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          const data = await resp.json();
+          if (data.error) throw new Error(data.error);
+          if (hasMap) {
+            (data.features || []).forEach(f => { const feat = toFeat(f); if (feat) vectorSource.addFeature(feat); });
+            if (data.center) { map.getView().animate({ center: fromLonLat([data.center.lon, data.center.lat]), zoom: 12, duration: 300 }); }
+          }
+          if (data.sites) renderList(data.sites);
+        } catch (e) {
+          alert('服务错误: ' + e.message);
+        } finally {
+          btn.disabled = false; btn.textContent = '生成推荐';
+        }
+      }
+
+      document.getElementById('runBtn').onclick = run;
+
+      // 地名/地标搜索并定位
+      async function searchPlace() {
+        const q = document.getElementById('placeSearch').value.trim();
+        if (!q) return;
+        const cityVal = document.getElementById('city').value;
+        const city = cityVal === 'guangzhou' ? '广州' : '';
+        const url = `/api/geocode?q=${encodeURIComponent(q)}&city=${encodeURIComponent(city)}`;
+        try {
+          const resp = await fetch(url);
+          const r = await resp.json();
+          if (!resp.ok || r.error) {
+            alert('未找到匹配地点');
+            return;
+          }
+          const lon = parseFloat(r.lon), lat = parseFloat(r.lat);
+          if (hasMap) {
+            if (searchMarker) { vectorSource.removeFeature(searchMarker); }
+            const feat = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
+            feat.setStyle(new Style({ image: new CircleStyle({ radius: 8, fill: new Fill({ color: '#ff4d4f' }), stroke: new Stroke({ color: '#fff', width: 2 }) }) }));
+            vectorSource.addFeature(feat);
+            searchMarker = feat;
+            map.getView().animate({ center: fromLonLat([lon, lat]), zoom: 15, duration: 400 });
+          } else {
+            alert(`位置：${lon.toFixed(6)}, ${lat.toFixed(6)}`);
+          }
+        } catch (e) {
+          alert('搜索失败：' + e.message);
+        }
+      }
+      document.getElementById('searchBtn').onclick = searchPlace;
+      document.getElementById('placeSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchPlace(); });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "TIANDITU_TK": "3f9e981062e875952608847cb5c466fd",
+  "AMAP_KEY": "52fe59f6fa4c4000739004426942af84",
+  "AMAP_CITY_DEFAULT": "广州",
+  "OPENAI_BASE_URL": "https://ai.nengyongai.cn/v1",
+  "OPENAI_API_KEY": "sk-CUFs8BOkF9yc2Cp3GPfVCTctnR4ipjhJdVH9ICTl7SXDCHMp",
+  "DEEPSEEK_API_KEY": "sk-c58fbe40a7ff4d24bcc8d15f07883f0b",
+  "OPENAI_CHAT_MODEL": "gpt-3.5-turbo-1106",
+  "OPENAI_EMBEDDING_MODEL": "text-embedding-ada-002"
+}
