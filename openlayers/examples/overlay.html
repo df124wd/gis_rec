@@ -1,0 +1,19 @@
+---
+layout: example.html
+title: Overlay
+shortdesc: Demonstrates overlays.
+docs: >
+  <p>The popups are created using <a href="https://getbootstrap.com/docs/5.2/components/popovers/">Popovers</a> from Bootstrap.</p>
+tags: "overlay, popup, bootstrap, popover"
+resources:
+  - https://cdn.jsdelivr.net/npm/bootstrap@5.2.0/dist/css/bootstrap.min.css
+  - https://cdn.jsdelivr.net/npm/bootstrap@5.2.0/dist/js/bootstrap.bundle.min.js
+---
+<div id="map" class="map"></div>
+<div style="display: none;">
+  <!-- Clickable label for Vienna -->
+  <a class="overlay" id="vienna" target="_blank" href="https://en.wikipedia.org/wiki/Vienna">Vienna</a>
+  <div id="marker" title="Marker"></div>
+  <!-- Popup -->
+  <div id="popup"></div>
+</div>
