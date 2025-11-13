@@ -1,0 +1,11 @@
+serverAddr = "<FRPS_ADDR>"
+serverPort = 7000
+[log]
+to = "frpc-gis-dev.log"
+level = "info"
+[[proxies]]
+name = "gis-dev"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8000
+remotePort = 9014
