@@ -1,0 +1,24 @@
+---
+layout: example.html
+title: Tracing around a polygon
+shortdesc: Using the draw interaction to trace around features.
+docs: >
+  The draw interaction has a <code>trace</code> option to enable tracing
+  around existing features.  This example uses the <code>traceSource</code> option
+  to trace features from one source and add them to another source.  The first click
+  on an edge of the target feature will start tracing.  The second click on the edge
+  will stop tracing.
+tags: "draw, trace, vector, snap, topology"
+cloak:
+  - key: get_your_own_D6rA4zTHduk6KOKTXzGB
+    value: Get your own API key at https://www.maptiler.com/cloud/
+---
+<div id="map" class="map"></div>
+<form>
+  <label for="type">Geometry type &nbsp;</label>
+  <select id="type">
+    <option value="Polygon">Polygon</option>
+    <option value="LineString">LineString</option>
+    <option value="None">None</option>
+  </select>
+</form>
