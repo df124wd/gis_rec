@@ -31,7 +31,8 @@ def _apply_env_from_config():
     keys = [
         'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'OPENAI_PROXY_BASE',
         'OPENAI_API_KEY', 'DEEPSEEK_API_KEY',
-        'OPENAI_CHAT_MODEL', 'OPENAI_EMBEDDING_MODEL'
+        'OPENAI_CHAT_MODEL', 'OPENAI_EMBEDDING_MODEL',
+        'EMBEDDING_PROVIDER', 'LOCAL_EMBEDDING_MODEL'
     ]
     for k in keys:
         v = CONFIG.get(k)
@@ -192,15 +193,12 @@ def recommendations():
             logger.warning('推荐请求缺少需求描述')
             return jsonify({"error": "需求描述不能为空"}), 400
 
-        # Load API key from environment
-        api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
-            logger.error('OPENAI_API_KEY 未设置')
-            return jsonify({"error": "OPENAI_API_KEY 未设置，请在环境变量中配置"}), 400
-
-        # 支持通过环境变量设置自定义 Base URL（如国内代理服务）
-        # OpenaiCall 内部也会自动读取 OPENAI_BASE_URL / OPENAI_API_BASE / OPENAI_PROXY_BASE
-        proxy = OpenaiCall(api_key=api_key)
+        # 初始化LLM代理（自动选择DeepSeek或OpenAI）
+        try:
+            proxy = OpenaiCall()  # 自动检测并使用DeepSeek（优先）或OpenAI
+        except ValueError as e:
+            logger.error(f'LLM API配置错误: {e}')
+            return jsonify({"error": f"LLM API未配置: {str(e)}"}), 400
 
         # 使用带交通与价格指标的真实数据CSV（自动生成同名npy）
         dataset_csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'land_transactions_with_coordinates_metrics.csv'))
