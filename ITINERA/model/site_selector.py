@@ -66,7 +66,8 @@ class SiteSelector:
                  enable_struct_filters=False):
         
         # 核心参数
-        self.MODEL = "gpt-4o"
+        # 模型名称由proxy自动选择（DeepSeek或OpenAI）
+        self.MODEL = None  # None表示使用proxy的默认模型
         self.min_site_candidate_num = min_site_candidate_num
         
         # 处理用户需求

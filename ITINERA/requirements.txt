@@ -19,3 +19,6 @@ tqdm==4.67.0
 xyconvert==0.1.2
 xyzservices==2024.9.0
 Flask==3.0.3
+
+# 本地Embedding支持（可选，推荐安装以节省成本）
+sentence-transformers>=2.2.0

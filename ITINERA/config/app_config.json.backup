@@ -2,15 +2,19 @@
   "TIANDITU_TK": "3f9e981062e875952608847cb5c466fd",
   "AMAP_KEY": "52fe59f6fa4c4000739004426942af84",
   "AMAP_CITY_DEFAULT": "广州",
+  
   "_comment_llm": "=== LLM配置：优先使用DeepSeek（成本低） ===",
   "DEEPSEEK_API_KEY": "sk-c58fbe40a7ff4d24bcc8d15f07883f0b",
   "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+  
   "_comment_openai": "=== OpenAI配置（备用，余额不足时可注释） ===",
   "OPENAI_API_KEY": "",
   "OPENAI_BASE_URL": "",
+  "OPENAI_CHAT_MODEL": "deepseek-chat",
+  
   "_comment_embedding": "=== Embedding配置 ===",
   "_comment_embedding_options": "可选值: openai(需付费) | local(免费，需安装sentence-transformers)",
   "EMBEDDING_PROVIDER": "local",
-  "LOCAL_EMBEDDING_MODEL": "model/llm_model/models--BAAI--bge-base-zh-v1.5/snapshots/f03589ceff5aac7111bd60cfc7d497ca17ecac65",
+  "LOCAL_EMBEDDING_MODEL": "BAAI/bge-base-zh-v1.5",
   "OPENAI_EMBEDDING_MODEL": "text-embedding-ada-002"
 }
