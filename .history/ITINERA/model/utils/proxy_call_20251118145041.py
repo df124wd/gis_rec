@@ -2,13 +2,8 @@ import requests
 import json
 import logging
 import os
-import threading
 
 from openai import OpenAI
-
-# 全局模型锁，防止并发加载
-_model_lock = threading.Lock()
-_global_model = None
 
 class OpenaiCall:
     """
@@ -167,35 +162,28 @@ class OpenaiCall:
                 model_name = model_path
                 print(f"[Embedding] 使用项目本地模型: {model_name}")
         
-        # 使用全局模型缓存（线程安全）
-        global _global_model
-        
-        if _global_model is None:
-            with _model_lock:
-                # 双重检查锁定
-                if _global_model is None:
-                    print(f"[Embedding] 加载本地模型: {model_name}")
-                    try:
-                        # 强制使用本地缓存，禁用所有在线检查
-                        import warnings
-                        warnings.filterwarnings('ignore', category=UserWarning)
-                        
-                        _global_model = SentenceTransformer(
-                            model_name,
-                            cache_folder=os.path.expanduser('~/.cache/huggingface/hub'),
-                            device='cpu'
-                        )
-                        print(f"[Embedding] ✓ 模型加载成功 (离线模式)")
-                    except Exception as e:
-                        # 如果离线模式失败，尝试在线模式（使用镜像）
-                        print(f"[Embedding] 离线加载失败，尝试在线模式: {e}")
-                        os.environ['TRANSFORMERS_OFFLINE'] = '0'
-                        os.environ['HF_HUB_OFFLINE'] = '0'
-                        huggingface_hub.constants.HF_HUB_OFFLINE = False
-                        _global_model = SentenceTransformer(model_name)
-                        print(f"[Embedding] ✓ 模型加载成功 (在线模式)")
-        
-        self._local_model = _global_model
+        # 缓存模型实例
+        if not hasattr(self, '_local_model'):
+            print(f"[Embedding] 加载本地模型: {model_name}")
+            try:
+                # 强制使用本地缓存，禁用所有在线检查
+                import warnings
+                warnings.filterwarnings('ignore', category=UserWarning)
+                
+                self._local_model = SentenceTransformer(
+                    model_name,
+                    cache_folder=os.path.expanduser('~/.cache/huggingface/hub'),
+                    device='cpu'
+                )
+                print(f"[Embedding] ✓ 模型加载成功 (离线模式)")
+            except Exception as e:
+                # 如果离线模式失败，尝试在线模式（使用镜像）
+                print(f"[Embedding] 离线加载失败，尝试在线模式: {e}")
+                os.environ['TRANSFORMERS_OFFLINE'] = '0'
+                os.environ['HF_HUB_OFFLINE'] = '0'
+                huggingface_hub.constants.HF_HUB_OFFLINE = False
+                self._local_model = SentenceTransformer(model_name)
+                print(f"[Embedding] ✓ 模型加载成功 (在线模式)")
         
         # 处理输入格式
         if isinstance(input_data, str):

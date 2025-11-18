@@ -870,18 +870,6 @@ class SiteSelector:
         final_ids = [idx for idx, score in ranked[:self.maxSiteNum]]
         final_scores = [score for idx, score in ranked[:self.maxSiteNum]]
         
-        # 如果帕累托前沿太少，补充其他候选
-        if len(final_ids) < self.maxSiteNum:
-            print(f"[多目标优化] 帕累托前沿只有{len(final_ids)}个地块，补充其他候选...")
-            # 从原始候选中补充（按语义相似度排序）
-            remaining_ids = [int(i) for i in req_topk_sites[:, 0] if int(i) not in final_ids]
-            remaining_scores = [float(s) for i, s in req_topk_sites if int(i) not in final_ids]
-            
-            # 补充到maxSiteNum
-            need_count = self.maxSiteNum - len(final_ids)
-            final_ids.extend(remaining_ids[:need_count])
-            final_scores.extend(remaining_scores[:need_count])
-        
         # 最小间距NMS（可选）
         if self.min_distance_meters > 0:
             final_ids = self._apply_spatial_diversity(final_ids)
@@ -1142,42 +1130,9 @@ class SiteSelector:
                         pass
                 # 优势/风险回填，避免空展示
                 if not site_entry.get('advantages'):
-                    # 如果LLM没有生成优势，使用地块描述
-                    site_entry['advantages'] = [row['context'][:200] if ('context' in row and isinstance(row['context'], str)) else (row['desc'] if 'desc' in row else "暂无详细信息")]
-                
+                    site_entry['advantages'] = row['context'] if ('context' in row and isinstance(row['context'], str)) else (row['desc'] if 'desc' in row else "")
                 if not site_entry.get('risks'):
-                    # 如果LLM没有生成风险，生成默认风险提示
-                    default_risks = []
-                    try:
-                        # 检查交通便利性
-                        traffic_score = float(row.get('交通_便利评分(0-10)', 0))
-                        if traffic_score < 3.0:
-                            default_risks.append("交通便利性较低，可能影响物流效率")
-                        
-                        # 检查价格
-                        price = float(row.get('价格_万元/㎡', 0))
-                        if price > 0.5:
-                            default_risks.append("单位面积价格较高，需评估投资回报")
-                        
-                        # 检查区域匹配
-                        if hasattr(self, 'hard_constraints'):
-                            for c in self.hard_constraints:
-                                if c.get('type') == '区域' and not c.get('is_negative', False):
-                                    constraint_text = c.get('text', '')
-                                    site_name = str(row.get('宗地坐落', ''))
-                                    if constraint_text and constraint_text not in site_name:
-                                        default_risks.append(f"地块不在指定区域（{constraint_text}）内")
-                                        break
-                        
-                        # 如果没有识别出任何风险，添加通用提示
-                        if not default_risks:
-                            default_risks.append("建议实地考察，确认周边配套设施")
-                            default_risks.append("需核实土地用途是否完全符合业务需求")
-                    except Exception:
-                        default_risks = ["建议详细评估地块的实际情况"]
-                    
-                    site_entry['risks'] = default_risks
-                
+                    site_entry['risks'] = site_entry.get('risks') or ""
                 if not site_entry.get('reason'):
                     site_entry['reason'] = (row['context'][:100] if ('context' in row and isinstance(row['context'], str)) else "")
 
@@ -1266,25 +1221,9 @@ class SiteSelector:
 - 发展潜力：未来增值空间
 
 ### 具体要求
-1. **每个地块必须包含**：
-   - advantages: 至少3条优势（数组格式）
-   - risks: 至少2条风险（数组格式，不能为空）
-   - reason: 推荐理由（字符串）
-   - score: 评分1-10分
+- 每个地块的优势不少于3条、风险不少于2条；尽量引用上下文中的具体数据（如距离、评分、价格等）以增强可解释性。
 
-2. **风险分析要点**（必须考虑）：
-   - 交通便利性不足
-   - 价格成本较高
-   - 区域位置不符合需求
-   - 用地性质限制
-   - 周边配套不完善
-   - 开发难度和时间成本
-
-3. **数据引用**：尽量引用具体数据（如距离、评分、价格等）
-
-**重要**：risks字段不能为空，必须至少包含2条风险分析！
-
-请按JSON格式输出。
+请按JSON格式输出，每个地块评分1-10分。
 """
 
     def solve(self):

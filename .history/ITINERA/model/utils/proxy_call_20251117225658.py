@@ -2,13 +2,8 @@ import requests
 import json
 import logging
 import os
-import threading
 
 from openai import OpenAI
-
-# 全局模型锁，防止并发加载
-_model_lock = threading.Lock()
-_global_model = None
 
 class OpenaiCall:
     """
@@ -140,62 +135,13 @@ class OpenaiCall:
                 "pip install sentence-transformers"
             )
         
-        # 设置HuggingFace镜像（国内加速）
-        if 'HF_ENDPOINT' not in os.environ:
-            os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-            print("[Embedding] 已设置HuggingFace镜像: https://hf-mirror.com")
-        
-        # 强制禁用在线检查（避免访问huggingface.co）
-        os.environ['TRANSFORMERS_OFFLINE'] = '1'
-        os.environ['HF_HUB_OFFLINE'] = '1'
-        os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
-        os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.expanduser('~/.cache/huggingface/hub')
-        
-        # 禁用huggingface_hub的在线检查
-        import huggingface_hub
-        huggingface_hub.constants.HF_HUB_OFFLINE = True
-        
         # 获取模型路径
         model_name = os.getenv("LOCAL_EMBEDDING_MODEL", "BAAI/bge-base-zh-v1.5")
         
-        # 如果是相对路径，转换为绝对路径
-        if not model_name.startswith(('/', 'C:', 'D:', 'E:', 'F:')) and ('/' in model_name or '\\' in model_name):
-            # 相对于项目根目录的路径
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-            model_path = os.path.join(project_root, model_name)
-            if os.path.exists(model_path):
-                model_name = model_path
-                print(f"[Embedding] 使用项目本地模型: {model_name}")
-        
-        # 使用全局模型缓存（线程安全）
-        global _global_model
-        
-        if _global_model is None:
-            with _model_lock:
-                # 双重检查锁定
-                if _global_model is None:
-                    print(f"[Embedding] 加载本地模型: {model_name}")
-                    try:
-                        # 强制使用本地缓存，禁用所有在线检查
-                        import warnings
-                        warnings.filterwarnings('ignore', category=UserWarning)
-                        
-                        _global_model = SentenceTransformer(
-                            model_name,
-                            cache_folder=os.path.expanduser('~/.cache/huggingface/hub'),
-                            device='cpu'
-                        )
-                        print(f"[Embedding] ✓ 模型加载成功 (离线模式)")
-                    except Exception as e:
-                        # 如果离线模式失败，尝试在线模式（使用镜像）
-                        print(f"[Embedding] 离线加载失败，尝试在线模式: {e}")
-                        os.environ['TRANSFORMERS_OFFLINE'] = '0'
-                        os.environ['HF_HUB_OFFLINE'] = '0'
-                        huggingface_hub.constants.HF_HUB_OFFLINE = False
-                        _global_model = SentenceTransformer(model_name)
-                        print(f"[Embedding] ✓ 模型加载成功 (在线模式)")
-        
-        self._local_model = _global_model
+        # 缓存模型实例
+        if not hasattr(self, '_local_model'):
+            print(f"[Embedding] 加载本地模型: {model_name}")
+            self._local_model = SentenceTransformer(model_name)
         
         # 处理输入格式
         if isinstance(input_data, str):

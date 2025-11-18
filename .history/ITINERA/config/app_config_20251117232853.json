@@ -11,7 +11,6 @@
   "_comment_embedding": "=== Embedding配置 ===",
   "_comment_embedding_options": "可选值: openai(需付费) | local(免费，需安装sentence-transformers)",
   "EMBEDDING_PROVIDER": "local",
-  "LOCAL_EMBEDDING_MODEL": "BAAI/bge-base-zh-v1.5",
-  "_comment_model_note": "使用HuggingFace缓存中的模型（自动从~/.cache/huggingface/hub加载）",
+  "LOCAL_EMBEDDING_MODEL": "model/llm_model/models--BAAI--bge-base-zh-v1.5/snapshots/f03589ceff5aac7111bd60cfc7d497ca17ecac65",
   "OPENAI_EMBEDDING_MODEL": "text-embedding-ada-002"
 }

@@ -1,0 +1,26 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual env
+.venv/
+
+# Local history / IDE artifacts
+.history/
+
+# Logs
+*.log
+
+# Large local models (do not track model weights)
+ITINERA/model/llm_model/**
+
+# Generated dataset artifacts
+ITINERA/model/data/*.npy
+
+# Real frpc configs (keep only example files in repo)
+ITINERA/scripts/*.toml
+!ITINERA/scripts/*example.toml
+
+# Secrets and local config
+ITINERA/config/app_config.json
+ITINERA/config/app_config.json.backup
