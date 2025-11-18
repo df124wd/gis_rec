@@ -2,13 +2,8 @@ import requests
 import json
 import logging
 import os
-import threading
 
 from openai import OpenAI
-
-# 全局模型锁，防止并发加载
-_model_lock = threading.Lock()
-_global_model = None
 
 class OpenaiCall:
     """
@@ -65,9 +60,9 @@ class OpenaiCall:
         """
         Chat补全接口
         """
-        # 使用默认模型（根据provider自动选择）
+        # 优先使用环境变量配置的模型
         if model is None:
-            model = self.default_chat_model
+            model = os.getenv("OPENAI_CHAT_MODEL") or self.default_chat_model
         
         response = self.client.chat.completions.create(
             model=model,
@@ -81,7 +76,7 @@ class OpenaiCall:
         流式Chat接口
         """
         if model is None:
-            model = self.default_chat_model
+            model = os.getenv("OPENAI_CHAT_MODEL") or self.default_chat_model
         
         for chunk in self.client.chat.completions.create(
             model=model,
@@ -100,7 +95,7 @@ class OpenaiCall:
         Embedding接口
         支持：
         1. OpenAI text-embedding-ada-002
-        2. DeepSeek (不支持，需使用本地模型)
+        2. DeepSeek (通过Chat模拟，效果较差)
         3. 本地模型 (通过EMBEDDING_PROVIDER=local配置)
         """
         embedding_provider = os.getenv("EMBEDDING_PROVIDER", "openai")
@@ -109,14 +104,21 @@ class OpenaiCall:
         if embedding_provider == "local":
             return self._local_embedding(input_data)
         
-        # DeepSeek没有专用embedding接口，强制使用本地模型
-        if self.provider == "deepseek":
-            print("[警告] DeepSeek不支持Embedding API，自动切换到本地模型")
-            return self._local_embedding(input_data)
-        
         # 使用OpenAI Embedding
         if model is None:
-            model = self.default_embedding_model
+            model = os.getenv("OPENAI_EMBEDDING_MODEL") or self.default_embedding_model
+        
+        # DeepSeek没有专用embedding接口，需要使用OpenAI或本地模型
+        if self.provider == "deepseek" and "embedding" in model:
+            print("[警告] DeepSeek不支持Embedding API，建议配置EMBEDDING_PROVIDER=local使用本地模型")
+            print("[警告] 当前回退使用OpenAI Embedding（需要OPENAI_API_KEY）")
+            # 临时创建OpenAI客户端
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if not openai_key:
+                raise ValueError("DeepSeek不支持Embedding，且未配置OPENAI_API_KEY，请设置EMBEDDING_PROVIDER=local")
+            temp_client = OpenAI(api_key=openai_key)
+            response = temp_client.embeddings.create(input=input_data, model=model)
+            return response
         
         response = self.client.embeddings.create(
             input=input_data,
@@ -140,62 +142,13 @@ class OpenaiCall:
                 "pip install sentence-transformers"
             )
         
-        # 设置HuggingFace镜像（国内加速）
-        if 'HF_ENDPOINT' not in os.environ:
-            os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-            print("[Embedding] 已设置HuggingFace镜像: https://hf-mirror.com")
-        
-        # 强制禁用在线检查（避免访问huggingface.co）
-        os.environ['TRANSFORMERS_OFFLINE'] = '1'
-        os.environ['HF_HUB_OFFLINE'] = '1'
-        os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
-        os.environ['SENTENCE_TRANSFORMERS_HOME'] = os.path.expanduser('~/.cache/huggingface/hub')
-        
-        # 禁用huggingface_hub的在线检查
-        import huggingface_hub
-        huggingface_hub.constants.HF_HUB_OFFLINE = True
-        
         # 获取模型路径
         model_name = os.getenv("LOCAL_EMBEDDING_MODEL", "BAAI/bge-base-zh-v1.5")
         
-        # 如果是相对路径，转换为绝对路径
-        if not model_name.startswith(('/', 'C:', 'D:', 'E:', 'F:')) and ('/' in model_name or '\\' in model_name):
-            # 相对于项目根目录的路径
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-            model_path = os.path.join(project_root, model_name)
-            if os.path.exists(model_path):
-                model_name = model_path
-                print(f"[Embedding] 使用项目本地模型: {model_name}")
-        
-        # 使用全局模型缓存（线程安全）
-        global _global_model
-        
-        if _global_model is None:
-            with _model_lock:
-                # 双重检查锁定
-                if _global_model is None:
-                    print(f"[Embedding] 加载本地模型: {model_name}")
-                    try:
-                        # 强制使用本地缓存，禁用所有在线检查
-                        import warnings
-                        warnings.filterwarnings('ignore', category=UserWarning)
-                        
-                        _global_model = SentenceTransformer(
-                            model_name,
-                            cache_folder=os.path.expanduser('~/.cache/huggingface/hub'),
-                            device='cpu'
-                        )
-                        print(f"[Embedding] ✓ 模型加载成功 (离线模式)")
-                    except Exception as e:
-                        # 如果离线模式失败，尝试在线模式（使用镜像）
-                        print(f"[Embedding] 离线加载失败，尝试在线模式: {e}")
-                        os.environ['TRANSFORMERS_OFFLINE'] = '0'
-                        os.environ['HF_HUB_OFFLINE'] = '0'
-                        huggingface_hub.constants.HF_HUB_OFFLINE = False
-                        _global_model = SentenceTransformer(model_name)
-                        print(f"[Embedding] ✓ 模型加载成功 (在线模式)")
-        
-        self._local_model = _global_model
+        # 缓存模型实例
+        if not hasattr(self, '_local_model'):
+            print(f"[Embedding] 加载本地模型: {model_name}")
+            self._local_model = SentenceTransformer(model_name)
         
         # 处理输入格式
         if isinstance(input_data, str):

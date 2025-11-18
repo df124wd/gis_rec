@@ -61,10 +61,9 @@ class SiteSelector:
                  city=None, type='zh', blend_w_text=0.5,
                  enable_llm_constraints=True, blend_w_struct=0.3,
                  deepseek_base_url=None, deepseek_api_key=None,
-                 enable_spatial_optimization=False,
+                 enable_spatial_optimization=False, enable_route_order=False,
                  min_distance_meters=0, dataset_path=None,
-                 enable_struct_filters=False,
-                 enable_multi_objective=True):
+                 enable_struct_filters=False):
         
         # 核心参数
         # 模型名称由proxy自动选择（DeepSeek或OpenAI）
@@ -80,11 +79,10 @@ class SiteSelector:
         # 融合权重
         self.blend_w_text = float(blend_w_text)
         self.blend_w_struct = float(blend_w_struct)
-        # 空间优化开关
+        # 空间优化与访问顺序开关
         self.enable_spatial_optimization = bool(enable_spatial_optimization)
+        self.enable_route_order = bool(enable_route_order)
         self.min_distance_meters = int(min_distance_meters) if min_distance_meters is not None else 0
-        # 多目标优化开关
-        self.enable_multi_objective = bool(enable_multi_objective)
         
         # 解析用户需求
         parsed_request = self.parse_user_request(user_reqs)
@@ -644,8 +642,177 @@ class SiteSelector:
         
         return sorted_results, pseudo_must_see_sites
 
-    # apply_struct_filters方法已移除（约170行代码）
-    # 原因：过度工程化，与语义检索重叠，LLM映射不稳定
+    def apply_struct_filters(self, sorted_results: np.ndarray) -> np.ndarray:
+        """LLM增强的结构化过滤：
+        - 使用DeepSeek将硬性约束映射为列级规则，并生成同义文本用于语义检索增强。
+        - 计算结构化掩码并过滤候选，保留满足度更高的地块；保存同义词以供硬性约束文本过滤使用。
+        - 计算结构化满足度(每站点满足的规则数/总规则数)，用于后续加权（可选）。
+        """
+        if not isinstance(sorted_results, np.ndarray) or sorted_results.size == 0:
+            return sorted_results
+
+        columns = self.site_data.columns.tolist()
+        has_constraints = hasattr(self, 'hard_constraints') and len(self.hard_constraints) > 0
+        pre_rules = self.derive_pre_rules_from_hard_constraints(columns) if has_constraints else []
+        rules = []
+        self.synonyms_map = {}
+
+        if self.llm_constraints_enabled and has_constraints:
+            # 为每列采样若干示例值，辅助映射
+            samples = {}
+            try:
+                head = self.site_data.head(5)
+                for col in columns:
+                    vals = head[col].dropna().astype(str).tolist()
+                    samples[col] = vals
+            except Exception:
+                samples = {}
+
+            prompt = self.get_struct_constraint_prompt(constraints=self.hard_constraints, columns=columns, samples=samples)
+            messages = [
+                {"role": "system", "content": "你是专业的选址约束工程师，输出严格JSON"},
+                {"role": "user", "content": prompt}
+            ]
+            try:
+                resp = self.deepseek_client.chat_json(messages=messages, model="deepseek-chat")
+                parsed = json.loads(resp)
+                llm_rules = parsed.get("rules", []) or []
+                self.synonyms_map = parsed.get("synonyms", {}) or {}
+            except Exception as e:
+                print(f"LLM结构化解析失败：{e}")
+                llm_rules = []
+
+            rules = pre_rules + llm_rules
+            try:
+                print(f"结构化约束：预设规则 {len(pre_rules)} 条，LLM规则 {len(llm_rules)} 条")
+            except Exception:
+                pass
+        else:
+            rules = pre_rules
+            if len(pre_rules) > 0:
+                print(f"结构化约束：使用预设规则 {len(pre_rules)} 条（未启用LLM或无硬性约束）")
+            else:
+                return sorted_results
+
+        # 打印结构化约束解析摘要
+        try:
+            print(f"结构化约束：生成规则 {len(rules)} 条，同义词条目 {len(self.synonyms_map)}")
+        except Exception:
+            pass
+        if len(rules) == 0:
+            # 无规则则不做结构化过滤
+            return sorted_results
+
+        N = self.site_data.shape[0]
+        # 初始化结构化满足度计数
+        satisfied = np.zeros(N, dtype=float)
+        total_rules = 0
+        # 累积掩码，默认全保留
+        struct_mask = np.ones(N, dtype=bool)
+
+        def to_numeric_series(series: pd.Series) -> pd.Series:
+            try:
+                return pd.to_numeric(series, errors='coerce')
+            except Exception:
+                return pd.Series([np.nan] * len(series))
+
+        for r in rules:
+            col = r.get("column")
+            op = (r.get("op") or "").lower()
+            val = r.get("value")
+            neg = bool(r.get("negative", False))
+            conf = float(r.get("confidence", 0.0))
+            if col not in columns or conf < 0.3:
+                continue
+            series = self.site_data[col]
+            mask = np.ones(N, dtype=bool)
+            try:
+                if op in ["<=", ">=", "<", ">"]:
+                    s_num = to_numeric_series(series)
+                    v_num = None
+                    try:
+                        v_num = float(val)
+                    except Exception:
+                        v_num = np.nan
+                    if np.isnan(v_num):
+                        continue
+                    if op == "<=":
+                        mask = (s_num <= v_num)
+                    elif op == ">=":
+                        mask = (s_num >= v_num)
+                    elif op == "<":
+                        mask = (s_num < v_num)
+                    elif op == ">":
+                        mask = (s_num > v_num)
+                elif op == "==":
+                    mask = series.astype(str).str.lower() == str(val).lower()
+                elif op == "contains":
+                    mask = series.astype(str).str.contains(str(val), case=False, na=False)
+                elif op == "regex":
+                    try:
+                        mask = series.astype(str).str.contains(str(val), flags=re.I, na=False)
+                    except Exception:
+                        mask = series.astype(str).str.contains(str(val), case=False, na=False)
+                elif op == "in":
+                    values = val if isinstance(val, list) else [val]
+                    values = [str(v) for v in values if v is not None]
+                    if len(values) == 0:
+                        continue
+                    comb = np.zeros(N, dtype=bool)
+                    base = series.astype(str).str.lower()
+                    for v in values:
+                        comb = comb | base.str.contains(v.lower(), na=False)
+                    mask = comb
+                else:
+                    # 未知操作符，跳过
+                    continue
+            except Exception:
+                continue
+
+            total_rules += 1
+            if neg:
+                struct_mask = struct_mask & (~mask)
+                satisfied += (~mask).astype(float)
+            else:
+                struct_mask = struct_mask & mask
+                satisfied += mask.astype(float)
+
+        if total_rules > 0:
+            struct_score = satisfied / float(total_rules)
+        else:
+            struct_score = np.ones(N, dtype=float)
+
+        # 缓存结构化满足度，便于后续推荐解释
+        try:
+            self.struct_score_by_index = {int(i): float(struct_score[int(i)]) for i in range(N)}
+        except Exception:
+            self.struct_score_by_index = {}
+
+        # 在候选排序上应用掩码
+        keep_set = {int(i) for i in np.where(struct_mask)[0].tolist()}
+        mask_res = np.array([int(i) in keep_set for i in sorted_results[:, 0]])
+        filtered = sorted_results[mask_res]
+        try:
+            print(f"结构化约束过滤后数量：{int(filtered.shape[0])}/{int(sorted_results.shape[0])}")
+        except Exception:
+            pass
+
+        if filtered.size == 0:
+            print("结构化约束过滤后为空，回退原结果")
+            return sorted_results
+
+        # 排序仅使用文本分数（禁用 SAFE 与结构化满足度加权）
+        try:
+            idxs = filtered[:, 0].astype(int)
+            t_scores = np.array([self.text_score_map.get(int(i), self.text_score_min) for i in idxs], dtype=float)
+            denom = (self.text_score_max - self.text_score_min) if (self.text_score_max - self.text_score_min) > 1e-8 else 1.0
+            t_norm = (t_scores - self.text_score_min) / denom
+            fused = np.column_stack((idxs, t_norm))
+            filtered = fused[fused[:, 1].argsort()[::-1]]
+        except Exception:
+            pass
+
+        return filtered
 
     def apply_hard_constraints(self, sorted_results: np.ndarray) -> np.ndarray:
         """对候选结果应用硬性约束：
@@ -727,11 +894,7 @@ class SiteSelector:
         return filtered
 
     def optimize_site_selection(self, req_topk_sites, pseudo_must_see):
-        """空间优化选址（集成多目标优化）"""
-        # 若启用多目标优化，使用帕累托前沿
-        if self.enable_multi_objective and not self.enable_spatial_optimization:
-            return self._multi_objective_selection(req_topk_sites, pseudo_must_see)
-        
+        """空间优化选址"""
         # 若关闭空间优化，采用简化策略：按分数排序取Top-K，并可选地做最小间距NMS，始终包含must_see
         if not self.enable_spatial_optimization:
             # 将输入转为(list of (id, score))
@@ -813,192 +976,38 @@ class SiteSelector:
 
         return sites, scores, clusters
 
-    # generate_site_order方法已移除（TSP访问顺序）
-    # 原因：选址推荐不需要访问顺序，与业务场景不符
+    def generate_site_order(self, sites, clusters):
+        """生成地块访问顺序"""
+        # 关闭访问顺序生成时，保持当前排序并返回单一聚类
+        if not self.enable_route_order:
+            if clusters is None or len(clusters) == 0:
+                clusters = [list(sites)] if isinstance(sites, (list, np.ndarray)) else [[]]
+            return np.array(sites), list(range(len(clusters))), clusters
 
-    def _multi_objective_selection(self, req_topk_sites, pseudo_must_see):
-        """
-        多目标优化选址（帕累托前沿）
-        根据用户需求动态选择优化目标和权重
-        """
-        from model.multi_objective import MultiObjectiveOptimizer
+        # 调整聚类顺序
+        order = reorder_list(sites, clusters)
+        sites = np.array(sites)[order]
         
-        print("\n[多目标优化] 启用帕累托前沿算法...")
+        # 计算聚类中心
+        centroids = self.spatial_handler.get_cluster_centroids(clusters)
         
-        # 获取候选地块ID
-        candidate_ids = req_topk_sites[:, 0].astype(int).tolist()
+        # TSP求解聚类顺序
+        clusters_order, _, _ = self.spatial_handler.get_tsp_order(
+            locs=np.array(centroids)
+        )
         
-        # 确保must_see在候选中
-        for m in self.must_see_sites:
-            if m not in candidate_ids:
-                candidate_ids.insert(0, m)
+        # 调整起点
+        recurring_order = list(clusters_order) + [clusters_order[0]]
+        distances = compute_consecutive_distances(
+            np.array(centroids), recurring_order
+        )
+        max_dist_idx = distances.argsort()[-1:][0]
         
-        # 根据用户需求动态选择优化目标
-        objectives = self._derive_objectives()
-        print(f"[多目标优化] 优化目标: {[obj['name'] for obj in objectives]}")
+        new_clusters_order = []
+        new_clusters_order.extend(clusters_order[max_dist_idx + 1:])
+        new_clusters_order.extend(clusters_order[:max_dist_idx + 1])
         
-        # 推导评价指标权重并打印
-        weights = self.derive_scoring_weights()
-        print(f"[评价指标权重] 根据用户需求推导的权重:")
-        print(f"  - 交通便利性: {weights.get('traffic', 0):.2%}")
-        print(f"  - 价格成本: {weights.get('price', 0):.2%}")
-        print(f"  - 地区位置: {weights.get('region', 0):.2%}")
-        
-        # 创建优化器
-        optimizer = MultiObjectiveOptimizer(self.site_data)
-        
-        # 计算帕累托前沿
-        pareto_indices = optimizer.pareto_front(objectives, candidate_ids)
-        print(f"[多目标优化] 帕累托前沿包含 {len(pareto_indices)} 个地块（共{len(candidate_ids)}个候选）")
-        
-        # 解释帕累托前沿
-        explanation = optimizer.explain_pareto(pareto_indices, objectives)
-        print(f"[多目标优化] 多样性指标: {explanation['diversity']:.2f}")
-        if explanation['trade_offs']:
-            print("[多目标优化] 权衡分析:")
-            for trade_off in explanation['trade_offs']:  # 显示所有
-                print(f"  - {trade_off['objective']}最优: 地块{trade_off['best_index']} ({trade_off['best_value']:.2f})")
-        
-        # 将评价指标权重映射到优化目标
-        obj_weights = self._map_weights_to_objectives(weights, objectives)
-        print(f"[多目标优化] 目标权重映射: {obj_weights}")
-        
-        # 对帕累托前沿排序
-        ranked = optimizer.rank_pareto_front(pareto_indices, objectives, obj_weights)
-        
-        # 取Top-K
-        final_ids = [idx for idx, score in ranked[:self.maxSiteNum]]
-        final_scores = [score for idx, score in ranked[:self.maxSiteNum]]
-        
-        # 如果帕累托前沿太少，补充其他候选
-        if len(final_ids) < self.maxSiteNum:
-            print(f"[多目标优化] 帕累托前沿只有{len(final_ids)}个地块，补充其他候选...")
-            # 从原始候选中补充（按语义相似度排序）
-            remaining_ids = [int(i) for i in req_topk_sites[:, 0] if int(i) not in final_ids]
-            remaining_scores = [float(s) for i, s in req_topk_sites if int(i) not in final_ids]
-            
-            # 补充到maxSiteNum
-            need_count = self.maxSiteNum - len(final_ids)
-            final_ids.extend(remaining_ids[:need_count])
-            final_scores.extend(remaining_scores[:need_count])
-        
-        # 最小间距NMS（可选）
-        if self.min_distance_meters > 0:
-            final_ids = self._apply_spatial_diversity(final_ids)
-            final_scores = final_scores[:len(final_ids)]
-        
-        print(f"[多目标优化] 最终选择 {len(final_ids)} 个地块")
-        
-        clusters = [final_ids]  # 简化聚类
-        return final_ids, final_scores, clusters
-    
-    def _derive_objectives(self):
-        """
-        根据用户需求动态推导优化目标
-        """
-        objectives = []
-        
-        # 分析用户需求文本
-        req_texts = []
-        try:
-            if isinstance(self.user_reqs, str):
-                req_texts.append(self.user_reqs)
-            if hasattr(self, 'user_pos_reqs') and isinstance(self.user_pos_reqs, list):
-                req_texts.extend([t for t in self.user_pos_reqs if isinstance(t, str)])
-        except Exception:
-            pass
-        all_text = ' '.join([str(t) for t in req_texts]).lower()
-        
-        # 交通便利性（几乎总是需要，除非明确说"不考虑交通"）
-        if "不考虑交通" not in all_text and "无需交通" not in all_text:
-            # 默认包含交通目标
-            objectives.append({'name': '交通_便利评分(0-10)', 'maximize': True})
-        
-        # 价格成本（"适中"也算是关注价格）
-        if any(k in all_text for k in ["价格", "便宜", "成本", "预算", "经济", "适中"]):
-            objectives.append({'name': '价格_万元/㎡', 'maximize': False})  # 价格越低越好
-        
-        # 面积规模（"适中"也算是关注面积）
-        if any(k in all_text for k in ["面积", "大", "规模", "空间", "适中"]):
-            objectives.append({'name': '宗地面积(平方米)', 'maximize': True})
-        
-        # 如果没有明确目标，使用默认三目标组合
-        if not objectives:
-            objectives = [
-                {'name': '交通_便利评分(0-10)', 'maximize': True},
-                {'name': '价格_万元/㎡', 'maximize': False},
-                {'name': '宗地面积(平方米)', 'maximize': True}
-            ]
-        
-        # 确保至少有2个目标（单目标没有意义）
-        if len(objectives) == 1:
-            # 补充交通目标
-            if objectives[0]['name'] != '交通_便利评分(0-10)':
-                objectives.insert(0, {'name': '交通_便利评分(0-10)', 'maximize': True})
-            else:
-                # 补充价格目标
-                objectives.append({'name': '价格_万元/㎡', 'maximize': False})
-        
-        return objectives
-    
-    def _map_weights_to_objectives(self, weights, objectives):
-        """
-        将评价指标权重映射到优化目标
-        """
-        obj_weights = {}
-        for obj in objectives:
-            if '交通' in obj['name']:
-                obj_weights[obj['name']] = weights.get('traffic', 0.34)
-            elif '价格' in obj['name']:
-                obj_weights[obj['name']] = weights.get('price', 0.33)
-            elif '面积' in obj['name']:
-                obj_weights[obj['name']] = 0.1  # 面积权重较低
-            else:
-                obj_weights[obj['name']] = weights.get('region', 0.33)
-        
-        # 归一化
-        total = sum(obj_weights.values())
-        if total > 0:
-            obj_weights = {k: v/total for k, v in obj_weights.items()}
-        
-        return obj_weights
-    
-    def _apply_spatial_diversity(self, site_ids):
-        """
-        应用空间多样性过滤（最小间距NMS）
-        """
-        def haversine(lon1, lat1, lon2, lat2):
-            from math import radians, sin, cos, sqrt, atan2
-            R = 6371000.0
-            dlon = radians(lon2 - lon1)
-            dlat = radians(lat2 - lat1)
-            a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
-            c = 2 * atan2(sqrt(a), sqrt(1-a))
-            return R * c
-        
-        selected = []
-        for sid in site_ids:
-            if sid in self.must_see_sites:
-                selected.append(sid)
-                continue
-            
-            allow = True
-            try:
-                row = self.site_data.loc[sid]
-                lon, lat = float(row['lon']), float(row['lat'])
-                for s in selected:
-                    r2 = self.site_data.loc[s]
-                    d = haversine(lon, lat, float(r2['lon']), float(r2['lat']))
-                    if d < self.min_distance_meters:
-                        allow = False
-                        break
-            except Exception:
-                allow = True
-            
-            if allow:
-                selected.append(sid)
-        
-        return selected
+        return sites, new_clusters_order, clusters
 
     def generate_recommendation(self, ordered_sites, clusters):
         """生成推荐报告"""
@@ -1142,42 +1151,9 @@ class SiteSelector:
                         pass
                 # 优势/风险回填，避免空展示
                 if not site_entry.get('advantages'):
-                    # 如果LLM没有生成优势，使用地块描述
-                    site_entry['advantages'] = [row['context'][:200] if ('context' in row and isinstance(row['context'], str)) else (row['desc'] if 'desc' in row else "暂无详细信息")]
-                
+                    site_entry['advantages'] = row['context'] if ('context' in row and isinstance(row['context'], str)) else (row['desc'] if 'desc' in row else "")
                 if not site_entry.get('risks'):
-                    # 如果LLM没有生成风险，生成默认风险提示
-                    default_risks = []
-                    try:
-                        # 检查交通便利性
-                        traffic_score = float(row.get('交通_便利评分(0-10)', 0))
-                        if traffic_score < 3.0:
-                            default_risks.append("交通便利性较低，可能影响物流效率")
-                        
-                        # 检查价格
-                        price = float(row.get('价格_万元/㎡', 0))
-                        if price > 0.5:
-                            default_risks.append("单位面积价格较高，需评估投资回报")
-                        
-                        # 检查区域匹配
-                        if hasattr(self, 'hard_constraints'):
-                            for c in self.hard_constraints:
-                                if c.get('type') == '区域' and not c.get('is_negative', False):
-                                    constraint_text = c.get('text', '')
-                                    site_name = str(row.get('宗地坐落', ''))
-                                    if constraint_text and constraint_text not in site_name:
-                                        default_risks.append(f"地块不在指定区域（{constraint_text}）内")
-                                        break
-                        
-                        # 如果没有识别出任何风险，添加通用提示
-                        if not default_risks:
-                            default_risks.append("建议实地考察，确认周边配套设施")
-                            default_risks.append("需核实土地用途是否完全符合业务需求")
-                    except Exception:
-                        default_risks = ["建议详细评估地块的实际情况"]
-                    
-                    site_entry['risks'] = default_risks
-                
+                    site_entry['risks'] = site_entry.get('risks') or ""
                 if not site_entry.get('reason'):
                     site_entry['reason'] = (row['context'][:100] if ('context' in row and isinstance(row['context'], str)) else "")
 
@@ -1266,25 +1242,9 @@ class SiteSelector:
 - 发展潜力：未来增值空间
 
 ### 具体要求
-1. **每个地块必须包含**：
-   - advantages: 至少3条优势（数组格式）
-   - risks: 至少2条风险（数组格式，不能为空）
-   - reason: 推荐理由（字符串）
-   - score: 评分1-10分
+- 每个地块的优势不少于3条、风险不少于2条；尽量引用上下文中的具体数据（如距离、评分、价格等）以增强可解释性。
 
-2. **风险分析要点**（必须考虑）：
-   - 交通便利性不足
-   - 价格成本较高
-   - 区域位置不符合需求
-   - 用地性质限制
-   - 周边配套不完善
-   - 开发难度和时间成本
-
-3. **数据引用**：尽量引用具体数据（如距离、评分、价格等）
-
-**重要**：risks字段不能为空，必须至少包含2条风险分析！
-
-请按JSON格式输出。
+请按JSON格式输出，每个地块评分1-10分。
 """
 
     def solve(self):
@@ -1374,9 +1334,11 @@ class SiteSelector:
             except Exception:
                 pass
         
-        # TSP访问顺序已移除，直接使用评分排序
-        ordered_sites = sites
-        clusters_order = list(range(len(clusters))) if clusters else []
+        # 访问顺序生成（静默）
+        ordered_sites, clusters_order, clusters = self.generate_site_order(
+            sites, clusters
+        )
+        # 静默结束
         
         print("Step 3: 生成推荐报告...")
         recommendation = self.generate_recommendation(ordered_sites, clusters)

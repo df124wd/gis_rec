@@ -186,8 +186,6 @@ def recommendations():
         min_site_candidate_num = int(data.get('top_k', 10))
         city = data.get('city', 'guangzhou')
         type_ = data.get('type', 'zh')
-        # 多目标优化开关（默认启用）
-        enable_multi_objective = data.get('enable_multi_objective', True)
 
         if not requirements:
             logger.warning('推荐请求缺少需求描述')
@@ -210,8 +208,7 @@ def recommendations():
             proxy_call=proxy,
             type=type_,
             blend_w_text=w_text,
-            dataset_path=dataset_csv_path,
-            enable_multi_objective=enable_multi_objective
+            dataset_path=dataset_csv_path
         )
 
         logger.info('开始生成推荐: city=%s top_k=%s', city, min_site_candidate_num)
