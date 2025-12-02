@@ -119,21 +119,11 @@
       .score-table td { color: #333; }
       .score-table .highlight { color: #1677ff; font-weight: 600; }
       
-      /* 优势风险分析 */
-      .site-analysis { margin-top: 10px; }
-      .analysis-section { margin-bottom: 8px; }
-      .analysis-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
-      .adv-title { color: #52c41a; }
-      .risk-title { color: #ff4d4f; }
-      .analysis-list { 
-        margin: 0; 
-        padding-left: 18px; 
-        font-size: 12px; 
-        line-height: 1.6;
-      }
-      .adv-list li { color: #389e0d; }
-      .risk-list li { color: #cf1322; }
-      .no-data { color: #999; font-size: 12px; }
+      /* 优势风险 */
+      .site-info { font-size: 12px; color: #666; margin-top: 8px; }
+      .site-info strong { color: #333; }
+      .adv-text { color: #52c41a; }
+      .risk-text { color: #ff4d4f; }
       
       .hint { color: #999; font-size: 12px; }
     </style>
@@ -259,10 +249,10 @@
           if (r) reqsHtml += `<span class="parse-tag negative">排除: ${r}</span>`;
         });
         
-        // 硬性约束（不展示）
-        // (pr.hard_constraints || []).forEach(c => {
-        //   if (c) reqsHtml += `<span class="parse-tag constraint">必须: ${c}</span>`;
-        // });
+        // 硬性约束
+        (pr.hard_constraints || []).forEach(c => {
+          if (c) reqsHtml += `<span class="parse-tag constraint">必须: ${c}</span>`;
+        });
         
         parsedReqs.innerHTML = reqsHtml || '<span class="hint">无法解析</span>';
         

@@ -461,37 +461,26 @@ class SiteSelector:
         return float(np.clip(score, 1.0, 10.0))
     
     def _area_score(self, row) -> float:
-        """面积评分：基于LLM推导的理想面积范围计算匹配度"""
+        """面积评分：归一化到[1,10]，面积越大分数越高"""
         try:
             area = float(row.get('宗地面积(平方米)', 0))
         except Exception:
             return 5.0
         
-        # 获取LLM推导的理想面积范围
-        ideal_range = getattr(self, '_ideal_area_range', {'min': 5000, 'max': 50000, 'ideal': 20000})
-        min_area = ideal_range.get('min', 5000)
-        max_area = ideal_range.get('max', 50000)
-        ideal_area = ideal_range.get('ideal', (min_area + max_area) / 2)
+        # 懒加载面积范围
+        if not hasattr(self, '_area_min') or self._area_min is None:
+            try:
+                s = pd.to_numeric(self.site_data['宗地面积(平方米)'], errors='coerce')
+                self._area_min = float(np.nanmin(s)) if np.isfinite(np.nanmin(s)) else 0.0
+                self._area_max = float(np.nanmax(s)) if np.isfinite(np.nanmax(s)) else 100000.0
+                if self._area_max <= self._area_min:
+                    self._area_max = self._area_min + 1.0
+            except Exception:
+                self._area_min, self._area_max = 0.0, 100000.0
         
-        # 计算面积匹配度
-        if min_area <= area <= max_area:
-            # 在理想范围内，越接近理想值分数越高
-            distance = abs(area - ideal_area)
-            max_distance = max(ideal_area - min_area, max_area - ideal_area)
-            if max_distance > 0:
-                score = 10.0 - 3.0 * (distance / max_distance)  # 7-10分
-            else:
-                score = 10.0
-        elif area < min_area:
-            # 面积太小，按比例扣分
-            ratio = area / min_area if min_area > 0 else 0
-            score = 1.0 + 5.0 * ratio  # 1-6分
-        else:
-            # 面积太大，按比例扣分（但不会太低，大面积也有价值）
-            excess_ratio = (area - max_area) / max_area if max_area > 0 else 1
-            score = max(4.0, 7.0 - 3.0 * min(excess_ratio, 1.0))  # 4-7分
-        
-        return float(np.clip(score, 1.0, 10.0))
+        # 归一化：面积越大分数越高
+        ratio = (area - self._area_min) / (self._area_max - self._area_min)
+        return float(np.clip(1.0 + 9.0 * ratio, 1.0, 10.0))
 
     def _intent_prioritize_traffic(self) -> bool:
         """根据用户需求文本判断是否明确强调交通便利。"""
@@ -1259,101 +1248,52 @@ class SiteSelector:
     def _generate_site_analysis(self, name: str, context: str, land_use: str, 
                                 total_price: float, area: float, scores: dict, 
                                 user_reqs: str) -> dict:
-        """用LLM为单个地块生成详细的优势/风险分析"""
+        """用LLM为单个地块生成优势/风险分析"""
         
-        # 获取理想面积范围
-        ideal_range = getattr(self, '_ideal_area_range', {'min': 5000, 'max': 50000, 'ideal': 20000})
-        
-        prompt = f"""你是专业的选址顾问，请为以下地块生成详细的优势和风险分析。
+        prompt = f"""请为以下地块生成优势和风险分析。
 
-## 地块基本信息
-- 名称/位置: {name}
-- 土地用途: {land_use}
-- 面积: {area:.0f}平方米（约{area/666.67:.1f}亩）
+## 地块信息
+- 名称: {name}
+- 用途: {land_use}
+- 面积: {area:.0f}平方米
 - 总价: {total_price:.0f}万元
-- 单价: {total_price/area*10000:.0f}元/㎡
+- 详情: {context[:200]}
 
-## 地块详细描述
-{context}
-
-## 系统评分（满分10分）
+## 评分（满分10分）
 - 交通便利性: {scores.get('traffic', 5):.2f}分
 - 性价比: {scores.get('price', 5):.2f}分（单价越低分越高）
-- 面积匹配度: {scores.get('area', 5):.2f}分（理想范围{ideal_range['min']:.0f}-{ideal_range['max']:.0f}㎡）
+- 面积规模: {scores.get('area', 5):.2f}分
 - 区位优势: {scores.get('region', 5):.2f}分
 - 综合评分: {scores.get('total', 5):.2f}分
 
 ## 用户需求
 {user_reqs}
 
-## 分析任务
-请从以下角度全面分析该地块：
-
-1. **优势分析**（3-4条）：
-   - 评分高的指标（≥7分）要重点说明
-   - 结合用户需求分析适配度
-   - 考虑该区域的产业环境、政策优势
-   - 分析土地用途与用户业务的匹配度
-
-2. **风险分析**（2-3条）：
-   - 评分低的指标（<5分）要指出具体问题
-   - 分析可能的隐性成本（配套建设、交通不便等）
-   - 考虑未来发展的限制因素
-   - 提出需要实地考察确认的事项
+## 任务
+根据评分和用户需求，生成2-3条优势和2条风险。优势要突出高分项，风险要指出低分项或潜在问题。
 
 ## 输出格式（严格JSON）
 {{
-    "advantages": [
-        "优势1：具体描述（引用评分数据）",
-        "优势2：具体描述",
-        "优势3：具体描述",
-        "优势4：具体描述"
-    ],
-    "risks": [
-        "风险1：具体描述（引用评分数据）",
-        "风险2：具体描述",
-        "风险3：具体描述"
-    ]
+    "advantages": ["优势1（引用具体分数）", "优势2", "优势3"],
+    "risks": ["风险1（引用具体分数）", "风险2"]
 }}
 
-要求：
-1. 每条优势/风险要具体、有数据支撑
-2. 内容要与用户需求紧密相关
-3. 每条40-60字，信息量充足"""
+注意：
+1. 必须引用实际评分数据
+2. 优势和风险要与用户需求相关
+3. 简洁明了，每条不超过30字"""
         
         try:
             response = self.proxy.chat(
                 messages=[{"role": "user", "content": prompt}],
                 model=self.MODEL
             )
-            
-            # 尝试解析JSON
-            try:
-                result = json.loads(response)
-            except json.JSONDecodeError:
-                # 尝试提取JSON部分
-                import re
-                match = re.search(r'\{[\s\S]*\}', response)
-                if match:
-                    result = json.loads(match.group())
-                else:
-                    raise ValueError("无法解析LLM响应")
-            
-            advantages = result.get('advantages', [])
-            risks = result.get('risks', [])
-            
-            # 确保返回的是列表
-            if not isinstance(advantages, list):
-                advantages = [str(advantages)] if advantages else []
-            if not isinstance(risks, list):
-                risks = [str(risks)] if risks else []
-            
+            result = json.loads(response)
             return {
-                'advantages': advantages,
-                'risks': risks
+                'advantages': result.get('advantages', []),
+                'risks': result.get('risks', [])
             }
         except Exception as e:
-            print(f"[LLM分析异常] {name[:20]}: {e}")
             raise e
     
     def _apply_spatial_diversity(self, site_ids):
