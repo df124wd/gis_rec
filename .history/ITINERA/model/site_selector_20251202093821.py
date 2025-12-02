@@ -117,149 +117,6 @@ class SiteSelector:
         self.text_score_map = {}
         self.text_score_min = 0.0
         self.text_score_max = 1.0
-        
-        # 用LLM智能推导区位评分映射（根据用户需求动态生成）
-        self._district_score_map = self._derive_region_scores_with_llm(user_reqs)
-        
-        # 用LLM智能推导理想面积范围（根据用户需求）
-        self._ideal_area_range = self._derive_ideal_area_with_llm(user_reqs)
-
-    def _derive_ideal_area_with_llm(self, user_reqs: str) -> dict:
-        """用LLM根据用户需求推导理想面积范围"""
-        
-        prompt = f"""你是专业的选址顾问。请根据用户需求，推导理想的地块面积范围。
-
-## 用户需求
-{user_reqs}
-
-## 任务
-分析用户需求中的业务类型，推导适合的地块面积范围（平方米）。
-
-## 参考标准
-- 小型食品加工厂: 5000-15000㎡
-- 中型食品生产厂: 15000-40000㎡
-- 大型食品工厂: 40000-100000㎡
-- 快递中转站: 3000-10000㎡
-- 物流仓储中心: 20000-80000㎡
-- 小型办公: 1000-5000㎡
-- 商业零售: 2000-10000㎡
-
-## 输出格式（严格JSON）
-{{
-    "min_area": 10000,
-    "max_area": 40000,
-    "ideal_area": 20000,
-    "reasoning": "食品生产厂需要中等规模场地"
-}}
-"""
-        
-        try:
-            response = self.proxy.chat(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.MODEL
-            )
-            result = json.loads(response)
-            
-            min_area = float(result.get('min_area', 5000))
-            max_area = float(result.get('max_area', 50000))
-            ideal_area = float(result.get('ideal_area', (min_area + max_area) / 2))
-            reasoning = result.get('reasoning', '')
-            
-            if reasoning:
-                print(f"[LLM面积推导] {reasoning}")
-            print(f"[LLM面积范围] 理想: {ideal_area:.0f}㎡, 范围: {min_area:.0f}-{max_area:.0f}㎡")
-            
-            return {'min': min_area, 'max': max_area, 'ideal': ideal_area}
-            
-        except Exception as e:
-            print(f"[LLM面积推导失败] {e}，使用默认范围")
-            return {'min': 5000, 'max': 50000, 'ideal': 20000}
-
-    def _derive_region_scores_with_llm(self, user_reqs: str) -> dict:
-        """用LLM根据用户需求智能推导各行政区的区位评分"""
-        
-        prompt = f"""你是专业的选址顾问。请根据用户的选址需求，为广州市各行政区打分。
-
-## 用户需求
-{user_reqs}
-
-## 广州市行政区列表
-天河区、越秀区、海珠区、荔湾区、黄埔区、白云区、番禺区、花都区、南沙区、增城区、从化区
-
-## 任务
-根据用户需求的业务类型和偏好，为每个行政区打分（1-10分）。
-
-## 评分原则
-- 如果是商业、金融、总部办公类需求 → 天河、越秀等核心区高分
-- 如果是工业、制造、仓储、物流类需求 → 花都、增城、南沙等产业区高分
-- 如果是食品加工、快递中转站类需求 → 花都、白云、增城等交通便利的产业区高分
-- 如果是住宅、教育配套类需求 → 天河、海珠、番禺等生活配套好的区高分
-- 如果用户明确指定了某个区域 → 该区域满分10分
-
-## 输出格式（严格JSON，不要其他内容）
-{{
-    "scores": {{
-        "天河区": 7.0,
-        "越秀区": 6.5,
-        "海珠区": 6.0,
-        "荔湾区": 5.5,
-        "黄埔区": 8.0,
-        "白云区": 7.5,
-        "番禺区": 6.0,
-        "花都区": 9.0,
-        "南沙区": 8.5,
-        "增城区": 8.0,
-        "从化区": 7.0
-    }},
-    "reasoning": "简要说明评分理由（30字以内）"
-}}
-
-## 参考示例
-- "花都区快递中转站" → 花都区=10.0, 白云区=8.5, 增城区=8.0, 天河区=5.0（物流产业适合郊区）
-- "天河区写字楼办公" → 天河区=10.0, 越秀区=9.0, 海珠区=8.0, 花都区=4.0（商务办公适合核心区）
-- "食品生产加工厂" → 花都区=9.5, 增城区=9.0, 从化区=8.5, 天河区=3.0（工业生产适合产业园区）
-
-请分析用户需求并输出评分JSON。"""
-        
-        try:
-            response = self.proxy.chat(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.MODEL
-            )
-            
-            result = json.loads(response)
-            scores = result.get('scores', {})
-            reasoning = result.get('reasoning', '')
-            
-            if reasoning:
-                print(f"[LLM区位评分] {reasoning}")
-            
-            # 验证并补全
-            default_scores = {
-                "天河区": 7.0, "越秀区": 7.0, "海珠区": 7.0, "荔湾区": 7.0,
-                "黄埔区": 7.0, "白云区": 7.0, "番禺区": 7.0, "花都区": 7.0,
-                "南沙区": 7.0, "增城区": 7.0, "从化区": 7.0
-            }
-            for district in default_scores:
-                if district not in scores or not isinstance(scores[district], (int, float)):
-                    scores[district] = default_scores[district]
-                else:
-                    scores[district] = float(np.clip(scores[district], 1.0, 10.0))
-            
-            # 打印评分结果
-            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            top3 = [f"{d}={s:.1f}" for d, s in sorted_scores[:3]]
-            print(f"[LLM区位评分] Top3: {', '.join(top3)}")
-            
-            return scores
-            
-        except Exception as e:
-            print(f"[LLM区位评分失败] {e}，使用默认评分")
-            return {
-                "天河区": 9.5, "越秀区": 9.3, "海珠区": 9.0, "荔湾区": 8.5,
-                "黄埔区": 7.8, "白云区": 7.5, "番禺区": 7.2, "花都区": 6.8,
-                "南沙区": 6.5, "增城区": 6.2, "从化区": 6.0
-            }
 
     def parse_user_request(self, user_reqs):
         """解析用户自然语言需求"""
@@ -311,21 +168,17 @@ class SiteSelector:
         return None
 
     def _region_score(self, name_or_addr: str | None) -> float:
-        """根据LLM推导的动态区位评分映射计算分数"""
-        # 使用LLM在初始化时生成的动态映射
-        score_map = getattr(self, '_district_score_map', {})
-        if not score_map:
-            # 兜底默认值
-            score_map = {
-                "天河区": 7.0, "越秀区": 7.0, "海珠区": 7.0, "荔湾区": 7.0,
-                "黄埔区": 7.0, "白云区": 7.0, "番禺区": 7.0, "花都区": 7.0,
-                "南沙区": 7.0, "增城区": 7.0, "从化区": 7.0
-            }
-        
-        district = self._district_from_text(name_or_addr)
-        if district and district in score_map:
-            return float(score_map[district])
-        return 7.0  #
+        # 默认行政区评分映射（可在__init__中覆盖）
+        default_map = {
+            "天河区": 9.5, "越秀区": 9.3, "海珠区": 9.0, "荔湾区": 8.5,
+            "黄埔区": 7.8, "白云区": 7.5, "番禺区": 7.2, "花都区": 6.8,
+            "南沙区": 6.5, "增城区": 6.2, "从化区": 6.0,
+        }
+        m = getattr(self, '_district_score_map', default_map)
+        d = self._district_from_text(name_or_addr)
+        if d and d in m:
+            return float(m[d])
+        return 7.0
 
     def _ensure_price_range(self):
         if getattr(self, '_price_min', None) is None or getattr(self, '_price_max', None) is None:
@@ -353,144 +206,61 @@ class SiteSelector:
         return float(np.clip(1.0 + 9.0 * inv, 1.0, 10.0))
 
     def derive_scoring_weights(self) -> dict:
-        """用LLM智能推导评价指标权重。返回 {'traffic': w_a, 'price': w_b, 'area': w_c, 'region': w_d}"""
-        
-        prompt = f"""你是专业的选址顾问。请根据用户需求，推导各评价指标的权重。
-
-## 用户需求
-{self.user_reqs}
-
-## 可用评价指标
-1. traffic - 交通便利性（地铁、公交、停车场、火车站的数量和距离）
-2. price - 价格成本（地块单价，越低越好）
-3. area - 地块规模（面积大小，通常越大越好）
-4. region - 区位优势（所在行政区的发展水平，如天河>花都）
-
-## 任务
-根据用户需求的侧重点，为每个指标分配权重（0-1之间，总和为1）。
-
-## 输出格式（严格JSON，不要其他内容）
-{{
-    "weights": {{
-        "traffic": 0.30,
-        "price": 0.25,
-        "area": 0.20,
-        "region": 0.25
-    }},
-    "reasoning": "简要说明权重分配理由（20字以内）"
-}}
-
-## 参考示例
-- "花都区快递中转站，价格适中，交通便利" → traffic=0.35, price=0.30, area=0.15, region=0.20（物流需要交通便利和成本控制）
-- "天河区20亩工业用地" → region=0.35, area=0.30, traffic=0.20, price=0.15（明确指定区域和面积）
-- "便宜的大面积仓储用地" → price=0.40, area=0.35, traffic=0.15, region=0.10（强调价格和面积）
-- "靠近地铁的商业用地" → traffic=0.50, region=0.25, price=0.15, area=0.10（强调交通便利）
-
-请分析用户需求并输出权重JSON。"""
-        
+        """根据用户需求关键词/硬性约束推导权重。返回 {'traffic': w_a, 'price': w_b, 'region': w_c}"""
+        w_a, w_b, w_c = 0.34, 0.33, 0.33
+        # 正向需求关键词
+        req_texts = []
         try:
-            response = self.proxy.chat(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.MODEL
-            )
-            
-            # 解析JSON
-            result = json.loads(response)
-            weights = result.get('weights', {})
-            reasoning = result.get('reasoning', '')
-            
-            if reasoning:
-                print(f"[LLM权重推导] {reasoning}")
-            
-            # 验证并补全缺失的权重
-            default_weights = {"traffic": 0.30, "price": 0.25, "area": 0.20, "region": 0.25}
-            for key in default_weights:
-                if key not in weights or not isinstance(weights[key], (int, float)):
-                    weights[key] = default_weights[key]
-            
-            # 归一化确保总和为1
-            total = sum(weights.values())
-            if total > 0:
-                weights = {k: float(v)/total for k, v in weights.items()}
-            
-            print(f"[LLM权重结果] traffic={weights['traffic']:.2f}, price={weights['price']:.2f}, area={weights['area']:.2f}, region={weights['region']:.2f}")
-            return weights
-            
-        except Exception as e:
-            print(f"[LLM权重推导失败] {e}，使用默认权重")
-            return {"traffic": 0.30, "price": 0.25, "area": 0.20, "region": 0.25}
+            req_texts = [t for t in self.user_pos_reqs if isinstance(t, str)]
+        except Exception:
+            req_texts = [self.user_reqs] if isinstance(self.user_reqs, str) else []
+        joined = " ".join(req_texts)
+        # 交通偏好
+        if any(k in joined for k in ["交通便利", "靠近地铁", "地铁", "公交", "交通"]):
+            w_a = 0.5; w_b = 0.25; w_c = 0.25
+        # 成本偏好
+        if any(k in joined for k in ["性价比", "价格", "便宜", "预算", "成本"]):
+            if w_a >= 0.5:
+                w_a, w_b, w_c = 0.45, 0.45, 0.10
+            else:
+                w_a, w_b, w_c = 0.25, 0.5, 0.25
+        # 硬性约束指定区域时弱化区域权重
+        try:
+            has_region_hard = any((c.get('type') == '区域' and not c.get('is_negative', False)) for c in getattr(self, 'hard_constraints', []))
+        except Exception:
+            has_region_hard = False
+        if has_region_hard:
+            w_c = min(w_c, 0.10)
+            total = w_a + w_b + w_c
+            if total > 1e-8:
+                w_a, w_b, w_c = (w_a/total, w_b/total, w_c/total)
+        return {"traffic": float(w_a), "price": float(w_b), "region": float(w_c)}
 
     def composite_score(self, site_id: int, weights: dict) -> float:
-        """计算综合排序分数，范围[1,10]。支持4个维度：交通、价格、面积、区位"""
+        """计算综合排序分数，范围[1,10]。"""
         try:
             row = self.site_data.loc[site_id]
         except Exception:
             return 5.0
-        
-        # 1. 交通便利性评分（直接使用数据集中的评分）
         try:
             traffic_s = float(row.get('交通_便利评分(0-10)'))
         except Exception:
             traffic_s = 5.0
         traffic_s = float(np.clip(traffic_s, 0.0, 10.0))
-        
-        # 2. 价格评分（越低越好）
         try:
             price_val = float(row.get('价格_万元/㎡'))
         except Exception:
             price_val = None
         price_s = self._price_score(price_val)
-        
-        # 3. 面积评分（归一化到0-10）
-        area_s = self._area_score(row)
-        
-        # 4. 区位评分
         try:
             addr = str(row.get('宗地坐落') or row.get('address') or row.get('name'))
         except Exception:
             addr = None
         region_s = self._region_score(addr)
-        
-        # 加权计算
-        w_traffic = float(weights.get('traffic', 0.30))
-        w_price = float(weights.get('price', 0.25))
-        w_area = float(weights.get('area', 0.20))
-        w_region = float(weights.get('region', 0.25))
-        
-        score = w_traffic * traffic_s + w_price * price_s + w_area * area_s + w_region * region_s
-        return float(np.clip(score, 1.0, 10.0))
-    
-    def _area_score(self, row) -> float:
-        """面积评分：基于LLM推导的理想面积范围计算匹配度"""
-        try:
-            area = float(row.get('宗地面积(平方米)', 0))
-        except Exception:
-            return 5.0
-        
-        # 获取LLM推导的理想面积范围
-        ideal_range = getattr(self, '_ideal_area_range', {'min': 5000, 'max': 50000, 'ideal': 20000})
-        min_area = ideal_range.get('min', 5000)
-        max_area = ideal_range.get('max', 50000)
-        ideal_area = ideal_range.get('ideal', (min_area + max_area) / 2)
-        
-        # 计算面积匹配度
-        if min_area <= area <= max_area:
-            # 在理想范围内，越接近理想值分数越高
-            distance = abs(area - ideal_area)
-            max_distance = max(ideal_area - min_area, max_area - ideal_area)
-            if max_distance > 0:
-                score = 10.0 - 3.0 * (distance / max_distance)  # 7-10分
-            else:
-                score = 10.0
-        elif area < min_area:
-            # 面积太小，按比例扣分
-            ratio = area / min_area if min_area > 0 else 0
-            score = 1.0 + 5.0 * ratio  # 1-6分
-        else:
-            # 面积太大，按比例扣分（但不会太低，大面积也有价值）
-            excess_ratio = (area - max_area) / max_area if max_area > 0 else 1
-            score = max(4.0, 7.0 - 3.0 * min(excess_ratio, 1.0))  # 4-7分
-        
+        w_a = float(weights.get('traffic', 0.34))
+        w_b = float(weights.get('price', 0.33))
+        w_c = float(weights.get('region', 0.33))
+        score = w_a * traffic_s + w_b * price_s + w_c * region_s
         return float(np.clip(score, 1.0, 10.0))
 
     def _intent_prioritize_traffic(self) -> bool:
@@ -1053,9 +823,7 @@ class SiteSelector:
         """
         from model.multi_objective import MultiObjectiveOptimizer
         
-        print("\n" + "="*80)
-        print("[多目标优化] 启用帕累托前沿算法...")
-        print("="*80)
+        print("\n[多目标优化] 启用帕累托前沿算法...")
         
         # 获取候选地块ID
         candidate_ids = req_topk_sites[:, 0].astype(int).tolist()
@@ -1067,107 +835,33 @@ class SiteSelector:
         
         # 根据用户需求动态选择优化目标
         objectives = self._derive_objectives()
-        print(f"\n[优化目标] 共{len(objectives)}个目标:")
-        for obj in objectives:
-            direction = "↑越大越好" if obj['maximize'] else "↓越小越好"
-            print(f"  - {obj.get('desc', obj['name'])}: {obj['name']} ({direction})")
+        print(f"[多目标优化] 优化目标: {[obj['name'] for obj in objectives]}")
         
         # 推导评价指标权重并打印
         weights = self.derive_scoring_weights()
-        print(f"\n[LLM推导权重]")
-        print(f"  - 交通便利性(traffic): {weights.get('traffic', 0):.1%}")
-        print(f"  - 价格成本(price): {weights.get('price', 0):.1%}")
-        print(f"  - 地块规模(area): {weights.get('area', 0):.1%}")
-        print(f"  - 区位优势(region): {weights.get('region', 0):.1%}")
+        print(f"[评价指标权重] 根据用户需求推导的权重:")
+        print(f"  - 交通便利性: {weights.get('traffic', 0):.2%}")
+        print(f"  - 价格成本: {weights.get('price', 0):.2%}")
+        print(f"  - 地区位置: {weights.get('region', 0):.2%}")
         
-        # 为每个候选地块计算各指标分数并打印
-        print(f"\n[候选地块评分详情] 共{len(candidate_ids)}个候选")
-        print("-"*100)
-        print(f"{'ID':<4} {'名称':<30} {'交通分':<8} {'价格(万)':<10} {'面积(㎡)':<12} {'区位分':<8} {'综合分':<8}")
-        print("-"*100)
-        
-        # 预计算每个地块的区位分数（使用LLM推导的映射）
-        site_scores = {}
-        for sid in candidate_ids:
-            try:
-                row = self.site_data.loc[sid]
-                name = str(row.get('name', row.get('宗地坐落', f'地块{sid}')))[:28]
-                
-                # 交通分
-                traffic = float(row.get('交通_便利评分(0-10)', 5.0))
-                
-                # 价格（总价或单价）
-                price_col = objectives[1]['name']  # 第二个目标是价格
-                price = float(row.get(price_col, 0))
-                
-                # 面积
-                area = float(row.get('宗地面积(平方米)', 0))
-                
-                # 区位分（使用LLM推导的动态映射）
-                addr = str(row.get('宗地坐落', ''))
-                region = self._region_score(addr)
-                
-                # 综合分（加权）
-                # 归一化价格和面积到0-10分
-                price_score = self._price_score(row.get('价格_万元/㎡'))
-                area_score = self._area_score(row)
-                composite = (weights.get('traffic', 0.25) * traffic + 
-                            weights.get('price', 0.25) * price_score +
-                            weights.get('area', 0.25) * area_score +
-                            weights.get('region', 0.25) * region)
-                
-                site_scores[sid] = {
-                    'traffic': traffic,
-                    'price': price,
-                    'area': area,
-                    'region': region,
-                    'composite': composite
-                }
-                
-                print(f"{sid:<4} {name:<30} {traffic:<8.2f} {price:<10.1f} {area:<12.1f} {region:<8.2f} {composite:<8.2f}")
-            except Exception as e:
-                print(f"{sid:<4} [读取失败: {e}]")
-        
-        print("-"*100)
-        
-        # 创建优化器（需要传入区位分数）
+        # 创建优化器
         optimizer = MultiObjectiveOptimizer(self.site_data)
-        
-        # 将区位分数添加到数据中供优化器使用
-        self.site_data['region_score'] = self.site_data.apply(
-            lambda row: self._region_score(str(row.get('宗地坐落', ''))), axis=1
-        )
         
         # 计算帕累托前沿
         pareto_indices = optimizer.pareto_front(objectives, candidate_ids)
+        print(f"[多目标优化] 帕累托前沿包含 {len(pareto_indices)} 个地块（共{len(candidate_ids)}个候选）")
         
-        print(f"\n[帕累托前沿] 共{len(pareto_indices)}个非支配解（从{len(candidate_ids)}个候选中筛选）")
-        if pareto_indices:
-            print("帕累托前沿地块及入选原因:")
-            for pid in pareto_indices:
-                try:
-                    row = self.site_data.loc[pid]
-                    name = str(row.get('name', ''))[:20]
-                    scores = site_scores.get(pid, {})
-                    
-                    # 分析该地块的优势
-                    advantages = []
-                    if scores.get('traffic', 0) >= 6:
-                        advantages.append(f"交通便利({scores['traffic']:.1f}分)")
-                    if scores.get('price', 0) < 3000:
-                        advantages.append(f"价格较低({scores['price']:.0f}万)")
-                    if scores.get('area', 0) > 20000:
-                        advantages.append(f"面积较大({scores['area']:.0f}㎡)")
-                    if scores.get('region', 0) >= 8:
-                        advantages.append(f"区位优越({scores['region']:.1f}分)")
-                    
-                    reason = "、".join(advantages) if advantages else "综合表现均衡"
-                    print(f"  - 地块{pid} ({name}): {reason}")
-                except:
-                    print(f"  - 地块{pid}")
+        # 解释帕累托前沿
+        explanation = optimizer.explain_pareto(pareto_indices, objectives)
+        print(f"[多目标优化] 多样性指标: {explanation['diversity']:.2f}")
+        if explanation['trade_offs']:
+            print("[多目标优化] 权衡分析:")
+            for trade_off in explanation['trade_offs']:  # 显示所有
+                print(f"  - {trade_off['objective']}最优: 地块{trade_off['best_index']} ({trade_off['best_value']:.2f})")
         
         # 将评价指标权重映射到优化目标
         obj_weights = self._map_weights_to_objectives(weights, objectives)
+        print(f"[多目标优化] 目标权重映射: {obj_weights}")
         
         # 对帕累托前沿排序
         ranked = optimizer.rank_pareto_front(pareto_indices, objectives, obj_weights)
@@ -1178,34 +872,32 @@ class SiteSelector:
         
         # 如果帕累托前沿太少，补充其他候选
         if len(final_ids) < self.maxSiteNum:
-            print(f"\n[补充候选] 帕累托前沿只有{len(final_ids)}个，需补充{self.maxSiteNum - len(final_ids)}个")
-            # 按综合分排序补充
-            remaining = [(sid, site_scores.get(sid, {}).get('composite', 0)) 
-                        for sid in candidate_ids if sid not in final_ids]
-            remaining.sort(key=lambda x: x[1], reverse=True)
+            print(f"[多目标优化] 帕累托前沿只有{len(final_ids)}个地块，补充其他候选...")
+            # 从原始候选中补充（按语义相似度排序）
+            remaining_ids = [int(i) for i in req_topk_sites[:, 0] if int(i) not in final_ids]
+            remaining_scores = [float(s) for i, s in req_topk_sites if int(i) not in final_ids]
             
-            for sid, score in remaining[:self.maxSiteNum - len(final_ids)]:
-                final_ids.append(sid)
-                final_scores.append(score)
-                name = str(self.site_data.loc[sid].get('name', ''))[:20]
-                print(f"  - 补充地块{sid} ({name}), 综合分={score:.2f}")
+            # 补充到maxSiteNum
+            need_count = self.maxSiteNum - len(final_ids)
+            final_ids.extend(remaining_ids[:need_count])
+            final_scores.extend(remaining_scores[:need_count])
         
         # 最小间距NMS（可选）
         if self.min_distance_meters > 0:
             final_ids = self._apply_spatial_diversity(final_ids)
             final_scores = final_scores[:len(final_ids)]
         
-        print(f"\n[最终结果] 选出{len(final_ids)}个推荐地块: {final_ids}")
-        print("="*80)
+        print(f"[多目标优化] 最终选择 {len(final_ids)} 个地块")
         
-        clusters = [final_ids]
+        clusters = [final_ids]  # 简化聚类
         return final_ids, final_scores, clusters
     
     def _derive_objectives(self):
         """
         根据用户需求动态推导优化目标
-        始终使用4个目标：交通、价格（总价）、面积、区位
         """
+        objectives = []
+        
         # 分析用户需求文本
         req_texts = []
         try:
@@ -1217,37 +909,52 @@ class SiteSelector:
             pass
         all_text = ' '.join([str(t) for t in req_texts]).lower()
         
-        # 判断是否强调性价比（单价）
-        use_unit_price = any(k in all_text for k in ["性价比", "单价", "每平米", "每平方米", "元/㎡"])
+        # 交通便利性（几乎总是需要，除非明确说"不考虑交通"）
+        if "不考虑交通" not in all_text and "无需交通" not in all_text:
+            # 默认包含交通目标
+            objectives.append({'name': '交通_便利评分(0-10)', 'maximize': True})
         
-        # 始终使用4个目标
-        objectives = [
-            {'name': '交通_便利评分(0-10)', 'maximize': True, 'desc': '交通便利性'},
-            {'name': '挂牌起始价(万元)' if not use_unit_price else '价格_万元/㎡', 
-             'maximize': False, 'desc': '价格成本（越低越好）'},
-            {'name': '宗地面积(平方米)', 'maximize': True, 'desc': '地块规模'},
-            {'name': 'region_score', 'maximize': True, 'desc': '区位优势'}  # 使用LLM推导的区位分
-        ]
+        # 价格成本（"适中"也算是关注价格）
+        if any(k in all_text for k in ["价格", "便宜", "成本", "预算", "经济", "适中"]):
+            objectives.append({'name': '价格_万元/㎡', 'maximize': False})  # 价格越低越好
+        
+        # 面积规模（"适中"也算是关注面积）
+        if any(k in all_text for k in ["面积", "大", "规模", "空间", "适中"]):
+            objectives.append({'name': '宗地面积(平方米)', 'maximize': True})
+        
+        # 如果没有明确目标，使用默认三目标组合
+        if not objectives:
+            objectives = [
+                {'name': '交通_便利评分(0-10)', 'maximize': True},
+                {'name': '价格_万元/㎡', 'maximize': False},
+                {'name': '宗地面积(平方米)', 'maximize': True}
+            ]
+        
+        # 确保至少有2个目标（单目标没有意义）
+        if len(objectives) == 1:
+            # 补充交通目标
+            if objectives[0]['name'] != '交通_便利评分(0-10)':
+                objectives.insert(0, {'name': '交通_便利评分(0-10)', 'maximize': True})
+            else:
+                # 补充价格目标
+                objectives.append({'name': '价格_万元/㎡', 'maximize': False})
         
         return objectives
     
     def _map_weights_to_objectives(self, weights, objectives):
         """
-        将评价指标权重映射到优化目标（4个目标）
+        将评价指标权重映射到优化目标
         """
         obj_weights = {}
         for obj in objectives:
-            name = obj['name']
-            if '交通' in name:
-                obj_weights[name] = weights.get('traffic', 0.25)
-            elif '价格' in name or '起始价' in name:
-                obj_weights[name] = weights.get('price', 0.25)
-            elif '面积' in name:
-                obj_weights[name] = weights.get('area', 0.25)
-            elif 'region' in name or '区位' in name:
-                obj_weights[name] = weights.get('region', 0.25)
+            if '交通' in obj['name']:
+                obj_weights[obj['name']] = weights.get('traffic', 0.34)
+            elif '价格' in obj['name']:
+                obj_weights[obj['name']] = weights.get('price', 0.33)
+            elif '面积' in obj['name']:
+                obj_weights[obj['name']] = 0.1  # 面积权重较低
             else:
-                obj_weights[name] = 0.1
+                obj_weights[obj['name']] = weights.get('region', 0.33)
         
         # 归一化
         total = sum(obj_weights.values())
@@ -1255,106 +962,6 @@ class SiteSelector:
             obj_weights = {k: v/total for k, v in obj_weights.items()}
         
         return obj_weights
-    
-    def _generate_site_analysis(self, name: str, context: str, land_use: str, 
-                                total_price: float, area: float, scores: dict, 
-                                user_reqs: str) -> dict:
-        """用LLM为单个地块生成详细的优势/风险分析"""
-        
-        # 获取理想面积范围
-        ideal_range = getattr(self, '_ideal_area_range', {'min': 5000, 'max': 50000, 'ideal': 20000})
-        
-        prompt = f"""你是专业的选址顾问，请为以下地块生成详细的优势和风险分析。
-
-## 地块基本信息
-- 名称/位置: {name}
-- 土地用途: {land_use}
-- 面积: {area:.0f}平方米（约{area/666.67:.1f}亩）
-- 总价: {total_price:.0f}万元
-- 单价: {total_price/area*10000:.0f}元/㎡
-
-## 地块详细描述
-{context}
-
-## 系统评分（满分10分）
-- 交通便利性: {scores.get('traffic', 5):.2f}分
-- 性价比: {scores.get('price', 5):.2f}分（单价越低分越高）
-- 面积匹配度: {scores.get('area', 5):.2f}分（理想范围{ideal_range['min']:.0f}-{ideal_range['max']:.0f}㎡）
-- 区位优势: {scores.get('region', 5):.2f}分
-- 综合评分: {scores.get('total', 5):.2f}分
-
-## 用户需求
-{user_reqs}
-
-## 分析任务
-请从以下角度全面分析该地块：
-
-1. **优势分析**（3-4条）：
-   - 评分高的指标（≥7分）要重点说明
-   - 结合用户需求分析适配度
-   - 考虑该区域的产业环境、政策优势
-   - 分析土地用途与用户业务的匹配度
-
-2. **风险分析**（2-3条）：
-   - 评分低的指标（<5分）要指出具体问题
-   - 分析可能的隐性成本（配套建设、交通不便等）
-   - 考虑未来发展的限制因素
-   - 提出需要实地考察确认的事项
-
-## 输出格式（严格JSON）
-{{
-    "advantages": [
-        "优势1：具体描述（引用评分数据）",
-        "优势2：具体描述",
-        "优势3：具体描述",
-        "优势4：具体描述"
-    ],
-    "risks": [
-        "风险1：具体描述（引用评分数据）",
-        "风险2：具体描述",
-        "风险3：具体描述"
-    ]
-}}
-
-要求：
-1. 每条优势/风险要具体、有数据支撑
-2. 内容要与用户需求紧密相关
-3. 每条40-60字，信息量充足"""
-        
-        try:
-            response = self.proxy.chat(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.MODEL
-            )
-            
-            # 尝试解析JSON
-            try:
-                result = json.loads(response)
-            except json.JSONDecodeError:
-                # 尝试提取JSON部分
-                import re
-                match = re.search(r'\{[\s\S]*\}', response)
-                if match:
-                    result = json.loads(match.group())
-                else:
-                    raise ValueError("无法解析LLM响应")
-            
-            advantages = result.get('advantages', [])
-            risks = result.get('risks', [])
-            
-            # 确保返回的是列表
-            if not isinstance(advantages, list):
-                advantages = [str(advantages)] if advantages else []
-            if not isinstance(risks, list):
-                risks = [str(risks)] if risks else []
-            
-            return {
-                'advantages': advantages,
-                'risks': risks
-            }
-        except Exception as e:
-            print(f"[LLM分析异常] {name[:20]}: {e}")
-            raise e
     
     def _apply_spatial_diversity(self, site_ids):
         """
@@ -1396,31 +1003,12 @@ class SiteSelector:
     def generate_recommendation(self, ordered_sites, clusters):
         """生成推荐报告"""
         
-        # 准备候选地块信息（包含完整的评分数据）
+        # 准备候选地块信息
         context_string = ""
         for i, site_id in enumerate(ordered_sites[:self.maxSiteNum]):
             site_info = self.site_data.loc[site_id]
-            
-            # 获取各项评分数据
-            traffic_score = float(site_info.get('交通_便利评分(0-10)', 0))
-            price = float(site_info.get('挂牌起始价(万元)', 0))
-            area = float(site_info.get('宗地面积(平方米)', 0))
-            addr = str(site_info.get('宗地坐落', ''))
-            region_score = self._region_score(addr)
-            land_use = str(site_info.get('土地用途', ''))
-            
-            # 交通详情
-            subway_count = int(site_info.get('交通_地铁数量(1.5km)', 0))
-            bus_count = int(site_info.get('交通_公交数量(0.5km)', 0))
-            parking_count = int(site_info.get('交通_停车数量(1km)', 0))
-            
-            # 构建详细的context
-            context_string += f"""序号{i+1}: {addr}
-  - 土地用途: {land_use}
-  - 面积: {area:.0f}平方米，起始价: {price:.0f}万元
-  - 交通便利评分: {traffic_score:.2f}分（1.5km内地铁{subway_count}个，500m内公交{bus_count}个，1km内停车场{parking_count}个）
-  - 区位评分: {region_score:.1f}分
-"""
+            context = site_info['context'] if 'context' in site_info else site_info['desc']
+            context_string += f'序号{i+1}: "{context[:100]}"\n'
         
         # 展示硬性约束文本（兼容旧字段）
         display_constraints = self.must_see_constraints_texts if hasattr(self, 'must_see_constraints_texts') else self.must_see_site_names
@@ -1474,54 +1062,38 @@ class SiteSelector:
             # 若明确强调交通便利，则在POI综合分中强化交通权重
             try:
                 if self._intent_prioritize_traffic():
-                    weights_poi = {'traffic': 0.50, 'price': 0.20, 'area': 0.15, 'region': 0.15}
+                    weights_poi = {'traffic': 0.80, 'price': 0.15, 'region': 0.05}
             except Exception:
                 pass
-            
-            # 确保权重包含所有4个键
-            default_weights = {'traffic': 0.25, 'price': 0.25, 'area': 0.25, 'region': 0.25}
-            for key in default_weights:
-                if key not in weights_poi:
-                    weights_poi[key] = default_weights[key]
-            # 预先计算每个地块的最终分（简化版：4指标加权求和）
-            # 公式：总分 = w_traffic*交通分 + w_price*价格分 + w_area*面积分 + w_region*区位分
+            final_w_vector = float(self.blend_w_text)
+            final_w_poi = float(1.0 - final_w_vector)
+            poi_struct_ratio = 0.2  # POI内规则分占比，结构化满足度归一到[1,10]
+
+            # 预先计算每个地块的最终分，便于排序
             score_by_id = {}
+            poi_by_id = {}
             breakdown_by_id = {}
-            
             for sid in display_ids:
                 sid_int = int(sid)
-                try:
-                    row = self.site_data.loc[sid_int]
-                    
-                    # 获取4个指标的归一化分数（都是0-10分）
-                    traffic_s = float(row.get('交通_便利评分(0-10)', 5.0))
-                    traffic_s = float(np.clip(traffic_s, 0.0, 10.0))
-                    
-                    price_s = self._price_score(row.get('价格_万元/㎡'))
-                    area_s = self._area_score(row)
-                    
-                    addr = str(row.get('宗地坐落', ''))
-                    region_s = self._region_score(addr)
-                    
-                    # 加权求和
-                    final_s = (
-                        weights_poi.get('traffic', 0.25) * traffic_s +
-                        weights_poi.get('price', 0.25) * price_s +
-                        weights_poi.get('area', 0.25) * area_s +
-                        weights_poi.get('region', 0.25) * region_s
-                    )
-                    final_s = float(np.clip(final_s, 1.0, 10.0))
-                    
-                except Exception:
-                    final_s = 5.0
-                    traffic_s = price_s = area_s = region_s = 5.0
-                
+                t_norm = norm_score(sid_int)
+                comp_s = self.composite_score(sid_int, weights_poi)
+                struct_raw = None
+                if hasattr(self, 'struct_score_by_index') and isinstance(self.struct_score_by_index, dict):
+                    struct_raw = self.struct_score_by_index.get(sid_int)
+                struct_norm = (1.0 + 9.0 * float(struct_raw)) if (struct_raw is not None) else None
+                if struct_norm is not None:
+                    poi_s = float((1.0 - poi_struct_ratio) * comp_s + poi_struct_ratio * struct_norm)
+                else:
+                    poi_s = float(comp_s)
+                final_s = final_w_vector * (t_norm if t_norm is not None else 5.0) + final_w_poi * poi_s
+                final_s = float(np.clip(final_s, 1.0, 10.0))
                 score_by_id[sid_int] = final_s
+                poi_by_id[sid_int] = poi_s
                 breakdown_by_id[sid_int] = {
-                    'traffic': traffic_s,
-                    'price': price_s,
-                    'area': area_s,
-                    'region': region_s,
+                    'text_norm': t_norm,
+                    'poi_composite': comp_s,
+                    'struct_norm': struct_norm,
+                    'poi_score': poi_s,
                     'final_score': final_s
                 }
             # 按最终分排序（高到低）；若显式强调交通便利，则按交通分重排
@@ -1568,61 +1140,59 @@ class SiteSelector:
                         site_entry['score'] = float(ns) if ns is not None else float('nan')
                     except Exception:
                         pass
-                # 获取评分数据
-                bd = breakdown_by_id.get(int(site_id), {})
-                traffic_s = bd.get('traffic', 5.0)
-                price_s = bd.get('price', 5.0)
-                area_s = bd.get('area', 5.0)
-                region_s = bd.get('region', 5.0)
-                final_s = bd.get('final_score', 5.0)
+                # 优势/风险回填，避免空展示
+                if not site_entry.get('advantages'):
+                    # 如果LLM没有生成优势，使用地块描述
+                    site_entry['advantages'] = [row['context'][:200] if ('context' in row and isinstance(row['context'], str)) else (row['desc'] if 'desc' in row else "暂无详细信息")]
                 
-                # 获取地块详细信息
-                context_text = row.get('context', '') if 'context' in row else ''
-                land_use = str(row.get('土地用途', ''))
-                total_price = float(row.get('挂牌起始价(万元)', 0))
-                area_raw = float(row.get('宗地面积(平方米)', 0))
-                
-                # 用LLM生成优势/风险
-                try:
-                    llm_result = self._generate_site_analysis(
-                        name=site_entry.get('name', ''),
-                        context=context_text,
-                        land_use=land_use,
-                        total_price=total_price,
-                        area=area_raw,
-                        scores={'traffic': traffic_s, 'price': price_s, 'area': area_s, 'region': region_s, 'total': final_s},
-                        user_reqs=self.user_reqs
-                    )
-                    site_entry['advantages'] = llm_result.get('advantages', [f"综合评分{final_s:.2f}分"])
-                    site_entry['risks'] = llm_result.get('risks', ["建议实地考察确认"])
-                except Exception as e:
-                    print(f"[LLM分析失败] {e}")
-                    # 回退到规则生成
-                    advantages = []
-                    if traffic_s >= 6: advantages.append(f"交通便利（{traffic_s:.2f}分）")
-                    if price_s >= 7: advantages.append(f"性价比高（{price_s:.2f}分）")
-                    if area_s >= 6: advantages.append(f"面积适中（{area_s:.2f}分）")
-                    if region_s >= 8: advantages.append(f"区位优越（{region_s:.2f}分）")
-                    site_entry['advantages'] = advantages if advantages else ["综合表现均衡"]
+                if not site_entry.get('risks'):
+                    # 如果LLM没有生成风险，生成默认风险提示
+                    default_risks = []
+                    try:
+                        # 检查交通便利性
+                        traffic_score = float(row.get('交通_便利评分(0-10)', 0))
+                        if traffic_score < 3.0:
+                            default_risks.append("交通便利性较低，可能影响物流效率")
+                        
+                        # 检查价格
+                        price = float(row.get('价格_万元/㎡', 0))
+                        if price > 0.5:
+                            default_risks.append("单位面积价格较高，需评估投资回报")
+                        
+                        # 检查区域匹配
+                        if hasattr(self, 'hard_constraints'):
+                            for c in self.hard_constraints:
+                                if c.get('type') == '区域' and not c.get('is_negative', False):
+                                    constraint_text = c.get('text', '')
+                                    site_name = str(row.get('宗地坐落', ''))
+                                    if constraint_text and constraint_text not in site_name:
+                                        default_risks.append(f"地块不在指定区域（{constraint_text}）内")
+                                        break
+                        
+                        # 如果没有识别出任何风险，添加通用提示
+                        if not default_risks:
+                            default_risks.append("建议实地考察，确认周边配套设施")
+                            default_risks.append("需核实土地用途是否完全符合业务需求")
+                    except Exception:
+                        default_risks = ["建议详细评估地块的实际情况"]
                     
-                    risks = []
-                    if traffic_s < 4: risks.append(f"交通便利性较低（{traffic_s:.2f}分）")
-                    if price_s < 4: risks.append(f"性价比较低（{price_s:.2f}分）")
-                    if area_s < 4: risks.append(f"面积偏小（{area_s:.2f}分）")
-                    if region_s < 6: risks.append(f"区位一般（{region_s:.2f}分）")
-                    site_entry['risks'] = risks if risks else ["建议实地考察确认"]
+                    site_entry['risks'] = default_risks
                 
-                site_entry['reason'] = f"综合评分{final_s:.2f}分"
+                if not site_entry.get('reason'):
+                    site_entry['reason'] = (row['context'][:100] if ('context' in row and isinstance(row['context'], str)) else "")
 
-                # 解释项：最终分拆解
+                # 解释项：最终分拆解（向量/POI/规则）
                 try:
+                    bd = breakdown_by_id.get(int(site_id), {})
                     debug_scores[str(site_id)] = {
-                        'traffic': bd.get('traffic'),
-                        'price': bd.get('price'),
-                        'area': bd.get('area'),
-                        'region': bd.get('region'),
+                        'text_norm': bd.get('text_norm'),
+                        'poi_composite': bd.get('poi_composite'),
+                        'struct_norm': bd.get('struct_norm'),
+                        'poi_score': bd.get('poi_score'),
                         'final_score': bd.get('final_score'),
-                        'weights': weights_poi
+                        'w_vector': float(final_w_vector),
+                        'w_poi': float(final_w_poi),
+                        'poi_struct_ratio': float(poi_struct_ratio)
                     }
                 except Exception:
                     pass
@@ -1652,55 +1222,6 @@ class SiteSelector:
             result['center'] = {"lon": center[0], "lat": center[1]}
         except Exception as _e:
             pass
-        
-        # 添加子需求和权重信息供前端展示
-        result['parsed_requirements'] = {
-            'original': self.user_reqs,
-            'positive': self.user_pos_reqs,
-            'negative': self.user_neg_reqs,
-            'hard_constraints': [c.get('text', '') for c in getattr(self, 'hard_constraints', [])]
-        }
-        
-        # 添加LLM推导的权重
-        try:
-            weights = self.derive_scoring_weights()
-            result['weights'] = {
-                'traffic': {'name': '交通便利性', 'value': weights.get('traffic', 0.25)},
-                'price': {'name': '价格成本', 'value': weights.get('price', 0.25)},
-                'area': {'name': '地块规模', 'value': weights.get('area', 0.25)},
-                'region': {'name': '区位优势', 'value': weights.get('region', 0.25)}
-            }
-        except:
-            result['weights'] = {}
-        
-        # 添加区位评分映射
-        result['region_scores'] = getattr(self, '_district_score_map', {})
-        
-        # 为每个地块添加详细评分
-        for key, site_entry in result.get('sites', {}).items():
-            try:
-                site_id = int(site_entry.get('id', 0))
-                row = self.site_data.loc[site_id]
-                
-                # 各项原始分数
-                traffic = float(row.get('交通_便利评分(0-10)', 0))
-                price = float(row.get('挂牌起始价(万元)', 0))
-                area = float(row.get('宗地面积(平方米)', 0))
-                addr = str(row.get('宗地坐落', ''))
-                region = self._region_score(addr)
-                
-                # 归一化分数（用于加权计算）
-                price_score = self._price_score(row.get('价格_万元/㎡'))
-                area_score = self._area_score(row)
-                
-                site_entry['score_details'] = {
-                    'traffic': {'raw': traffic, 'normalized': traffic, 'desc': f'{traffic:.2f}分'},
-                    'price': {'raw': price, 'normalized': price_score, 'desc': f'{price_score:.2f}分'},
-                    'area': {'raw': area, 'normalized': area_score, 'desc': f'{area_score:.2f}分'},
-                    'region': {'raw': region, 'normalized': region, 'desc': f'{region:.2f}分'}
-                }
-            except:
-                pass
         
         return result
 

@@ -1326,34 +1326,12 @@ class SiteSelector:
                 messages=[{"role": "user", "content": prompt}],
                 model=self.MODEL
             )
-            
-            # 尝试解析JSON
-            try:
-                result = json.loads(response)
-            except json.JSONDecodeError:
-                # 尝试提取JSON部分
-                import re
-                match = re.search(r'\{[\s\S]*\}', response)
-                if match:
-                    result = json.loads(match.group())
-                else:
-                    raise ValueError("无法解析LLM响应")
-            
-            advantages = result.get('advantages', [])
-            risks = result.get('risks', [])
-            
-            # 确保返回的是列表
-            if not isinstance(advantages, list):
-                advantages = [str(advantages)] if advantages else []
-            if not isinstance(risks, list):
-                risks = [str(risks)] if risks else []
-            
+            result = json.loads(response)
             return {
-                'advantages': advantages,
-                'risks': risks
+                'advantages': result.get('advantages', []),
+                'risks': result.get('risks', [])
             }
         except Exception as e:
-            print(f"[LLM分析异常] {name[:20]}: {e}")
             raise e
     
     def _apply_spatial_diversity(self, site_ids):

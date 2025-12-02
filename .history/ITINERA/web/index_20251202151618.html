@@ -259,10 +259,10 @@
           if (r) reqsHtml += `<span class="parse-tag negative">排除: ${r}</span>`;
         });
         
-        // 硬性约束（不展示）
-        // (pr.hard_constraints || []).forEach(c => {
-        //   if (c) reqsHtml += `<span class="parse-tag constraint">必须: ${c}</span>`;
-        // });
+        // 硬性约束
+        (pr.hard_constraints || []).forEach(c => {
+          if (c) reqsHtml += `<span class="parse-tag constraint">必须: ${c}</span>`;
+        });
         
         parsedReqs.innerHTML = reqsHtml || '<span class="hint">无法解析</span>';
         

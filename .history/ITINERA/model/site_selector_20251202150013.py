@@ -1259,101 +1259,52 @@ class SiteSelector:
     def _generate_site_analysis(self, name: str, context: str, land_use: str, 
                                 total_price: float, area: float, scores: dict, 
                                 user_reqs: str) -> dict:
-        """用LLM为单个地块生成详细的优势/风险分析"""
+        """用LLM为单个地块生成优势/风险分析"""
         
-        # 获取理想面积范围
-        ideal_range = getattr(self, '_ideal_area_range', {'min': 5000, 'max': 50000, 'ideal': 20000})
-        
-        prompt = f"""你是专业的选址顾问，请为以下地块生成详细的优势和风险分析。
+        prompt = f"""请为以下地块生成优势和风险分析。
 
-## 地块基本信息
-- 名称/位置: {name}
-- 土地用途: {land_use}
-- 面积: {area:.0f}平方米（约{area/666.67:.1f}亩）
+## 地块信息
+- 名称: {name}
+- 用途: {land_use}
+- 面积: {area:.0f}平方米
 - 总价: {total_price:.0f}万元
-- 单价: {total_price/area*10000:.0f}元/㎡
+- 详情: {context[:200]}
 
-## 地块详细描述
-{context}
-
-## 系统评分（满分10分）
+## 评分（满分10分）
 - 交通便利性: {scores.get('traffic', 5):.2f}分
 - 性价比: {scores.get('price', 5):.2f}分（单价越低分越高）
-- 面积匹配度: {scores.get('area', 5):.2f}分（理想范围{ideal_range['min']:.0f}-{ideal_range['max']:.0f}㎡）
+- 面积规模: {scores.get('area', 5):.2f}分
 - 区位优势: {scores.get('region', 5):.2f}分
 - 综合评分: {scores.get('total', 5):.2f}分
 
 ## 用户需求
 {user_reqs}
 
-## 分析任务
-请从以下角度全面分析该地块：
-
-1. **优势分析**（3-4条）：
-   - 评分高的指标（≥7分）要重点说明
-   - 结合用户需求分析适配度
-   - 考虑该区域的产业环境、政策优势
-   - 分析土地用途与用户业务的匹配度
-
-2. **风险分析**（2-3条）：
-   - 评分低的指标（<5分）要指出具体问题
-   - 分析可能的隐性成本（配套建设、交通不便等）
-   - 考虑未来发展的限制因素
-   - 提出需要实地考察确认的事项
+## 任务
+根据评分和用户需求，生成2-3条优势和2条风险。优势要突出高分项，风险要指出低分项或潜在问题。
 
 ## 输出格式（严格JSON）
 {{
-    "advantages": [
-        "优势1：具体描述（引用评分数据）",
-        "优势2：具体描述",
-        "优势3：具体描述",
-        "优势4：具体描述"
-    ],
-    "risks": [
-        "风险1：具体描述（引用评分数据）",
-        "风险2：具体描述",
-        "风险3：具体描述"
-    ]
+    "advantages": ["优势1（引用具体分数）", "优势2", "优势3"],
+    "risks": ["风险1（引用具体分数）", "风险2"]
 }}
 
-要求：
-1. 每条优势/风险要具体、有数据支撑
-2. 内容要与用户需求紧密相关
-3. 每条40-60字，信息量充足"""
+注意：
+1. 必须引用实际评分数据
+2. 优势和风险要与用户需求相关
+3. 简洁明了，每条不超过30字"""
         
         try:
             response = self.proxy.chat(
                 messages=[{"role": "user", "content": prompt}],
                 model=self.MODEL
             )
-            
-            # 尝试解析JSON
-            try:
-                result = json.loads(response)
-            except json.JSONDecodeError:
-                # 尝试提取JSON部分
-                import re
-                match = re.search(r'\{[\s\S]*\}', response)
-                if match:
-                    result = json.loads(match.group())
-                else:
-                    raise ValueError("无法解析LLM响应")
-            
-            advantages = result.get('advantages', [])
-            risks = result.get('risks', [])
-            
-            # 确保返回的是列表
-            if not isinstance(advantages, list):
-                advantages = [str(advantages)] if advantages else []
-            if not isinstance(risks, list):
-                risks = [str(risks)] if risks else []
-            
+            result = json.loads(response)
             return {
-                'advantages': advantages,
-                'risks': risks
+                'advantages': result.get('advantages', []),
+                'risks': result.get('risks', [])
             }
         except Exception as e:
-            print(f"[LLM分析异常] {name[:20]}: {e}")
             raise e
     
     def _apply_spatial_diversity(self, site_ids):

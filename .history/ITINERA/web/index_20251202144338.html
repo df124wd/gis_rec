@@ -119,21 +119,11 @@
       .score-table td { color: #333; }
       .score-table .highlight { color: #1677ff; font-weight: 600; }
       
-      /* 优势风险分析 */
-      .site-analysis { margin-top: 10px; }
-      .analysis-section { margin-bottom: 8px; }
-      .analysis-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
-      .adv-title { color: #52c41a; }
-      .risk-title { color: #ff4d4f; }
-      .analysis-list { 
-        margin: 0; 
-        padding-left: 18px; 
-        font-size: 12px; 
-        line-height: 1.6;
-      }
-      .adv-list li { color: #389e0d; }
-      .risk-list li { color: #cf1322; }
-      .no-data { color: #999; font-size: 12px; }
+      /* 优势风险 */
+      .site-info { font-size: 12px; color: #666; margin-top: 8px; }
+      .site-info strong { color: #333; }
+      .adv-text { color: #52c41a; }
+      .risk-text { color: #ff4d4f; }
       
       .hint { color: #999; font-size: 12px; }
     </style>
@@ -259,10 +249,10 @@
           if (r) reqsHtml += `<span class="parse-tag negative">排除: ${r}</span>`;
         });
         
-        // 硬性约束（不展示）
-        // (pr.hard_constraints || []).forEach(c => {
-        //   if (c) reqsHtml += `<span class="parse-tag constraint">必须: ${c}</span>`;
-        // });
+        // 硬性约束
+        (pr.hard_constraints || []).forEach(c => {
+          if (c) reqsHtml += `<span class="parse-tag constraint">必须: ${c}</span>`;
+        });
         
         parsedReqs.innerHTML = reqsHtml || '<span class="hint">无法解析</span>';
         
@@ -315,25 +305,9 @@
           const area = sd.area || {};
           const region = sd.region || {};
           
-          // 优势和风险（完整显示）
-          const advList = Array.isArray(s.advantages) ? s.advantages : [];
-          const riskList = Array.isArray(s.risks) ? s.risks : [];
-          
-          // 生成优势列表HTML
-          let advHtml = '';
-          if (advList.length > 0) {
-            advHtml = '<ul class="analysis-list adv-list">' + advList.map(a => `<li>${a}</li>`).join('') + '</ul>';
-          } else {
-            advHtml = '<span class="no-data">暂无</span>';
-          }
-          
-          // 生成风险列表HTML
-          let riskHtml = '';
-          if (riskList.length > 0) {
-            riskHtml = '<ul class="analysis-list risk-list">' + riskList.map(r => `<li>${r}</li>`).join('') + '</ul>';
-          } else {
-            riskHtml = '<span class="no-data">暂无</span>';
-          }
+          // 优势和风险
+          const adv = Array.isArray(s.advantages) ? s.advantages.slice(0, 2).join('；') : (s.advantages || '');
+          const risks = Array.isArray(s.risks) ? s.risks.slice(0, 2).join('；') : (s.risks || '');
           
           card.innerHTML = `
             <div class="site-header">
@@ -354,15 +328,9 @@
                 <td class="${region.normalized >= 8 ? 'highlight' : ''}">${region.desc || '-'}</td>
               </tr>
             </table>
-            <div class="site-analysis">
-              <div class="analysis-section">
-                <div class="analysis-title adv-title">✅ 优势</div>
-                ${advHtml}
-              </div>
-              <div class="analysis-section">
-                <div class="analysis-title risk-title">⚠️ 风险</div>
-                ${riskHtml}
-              </div>
+            <div class="site-info">
+              <div><strong>优势:</strong> <span class="adv-text">${adv || '暂无'}</span></div>
+              <div><strong>风险:</strong> <span class="risk-text">${risks || '暂无'}</span></div>
             </div>
           `;
           
