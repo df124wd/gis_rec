@@ -214,9 +214,7 @@ def recommendations():
         requirements = data.get('requirements', '').strip()
         # 文本权重固定为 1.0
         w_text = 1.0
-        # 子需求检索候选数量固定为10，最终推荐数量由top_k控制（默认5）
-        min_site_candidate_num = 10  # 每个子需求检索10个候选
-        top_k = int(data.get('top_k', 5))  # 最终推荐5个地块
+        min_site_candidate_num = int(data.get('top_k', 5))  # 默认推荐5个地块
         city = data.get('city', 'guangzhou')
         type_ = data.get('type', 'zh')
         # 多目标优化开关（默认启用）
@@ -244,11 +242,10 @@ def recommendations():
             type=type_,
             blend_w_text=w_text,
             dataset_path=dataset_csv_path,
-            enable_multi_objective=enable_multi_objective,
-            top_k=top_k  # 传入最终推荐数量
+            enable_multi_objective=enable_multi_objective
         )
 
-        logger.info('开始生成推荐: city=%s top_k=%s candidate_num=%s', city, top_k, min_site_candidate_num)
+        logger.info('开始生成推荐: city=%s top_k=%s', city, min_site_candidate_num)
         result = selector.solve()
         logger.info('推荐生成完成')
         # result is expected to contain: features (GeoJSON-like), center {lon, lat}, sites list, etc.

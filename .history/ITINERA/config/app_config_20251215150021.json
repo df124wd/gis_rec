@@ -4,7 +4,7 @@
   "AMAP_CITY_DEFAULT": "广州",
   "_comment_llm": "=== LLM配置：优先使用DeepSeek（成本低） ===",
   "DEEPSEEK_API_KEY": "sk-c58fbe40a7ff4d24bcc8d15f07883f0b",
-  "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+  "DEEPSEEK_BASE_URL": "https://api.deepseek.com/v3.2_speciale_expires_on_20251215",
   "_comment_openai": "=== OpenAI配置（备用，余额不足时可注释） ===",
   "OPENAI_API_KEY": "",
   "OPENAI_BASE_URL": "",

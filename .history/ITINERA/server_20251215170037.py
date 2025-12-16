@@ -30,16 +30,16 @@ if os.path.exists(CONFIG_PATH):
 def _apply_env_from_config():
     keys = [
         'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'OPENAI_PROXY_BASE',
-        'OPENAI_API_KEY', 'DEEPSEEK_API_KEY',
-        'OPENAI_CHAT_MODEL', 'OPENAI_EMBEDDING_MODEL'
+        'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL',
+        'OPENAI_CHAT_MODEL', 'OPENAI_EMBEDDING_MODEL',
+        'EMBEDDING_PROVIDER', 'LOCAL_EMBEDDING_MODEL'
     ]
     for k in keys:
         v = CONFIG.get(k)
         if isinstance(v, str):
             v = v.strip()
         if v:
-            if k in os.environ:
-                continue
+            # 配置文件优先，覆盖环境变量
             os.environ[k] = v
             if 'KEY' in k:
                 logger.info('%s 已设置', k)
@@ -175,6 +175,38 @@ def tiles_vec(z, x, y):
 def tiles_cva(z, x, y):
     return _proxy_tianditu('cva_w', z, x, y)
 
+# 影像底图（卫星图）
+@app.route('/tiles/img/<int:z>/<int:x>/<int:y>')
+def tiles_img(z, x, y):
+    return _proxy_tianditu('img_w', z, x, y)
+
+# 影像注记
+@app.route('/tiles/cia/<int:z>/<int:x>/<int:y>')
+def tiles_cia(z, x, y):
+    return _proxy_tianditu('cia_w', z, x, y)
+
+@app.route('/api/poi_details/<int:site_index>', methods=['GET'])
+def get_poi_details(site_index):
+    """获取指定地块的POI详情"""
+    try:
+        poi_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'poi_details'))
+        filename = f"site_{site_index:03d}_poi.json"
+        filepath = os.path.join(poi_dir, filename)
+        
+        if not os.path.exists(filepath):
+            logger.warning(f'POI详情文件不存在: {filepath}')
+            return jsonify({'error': 'not_found', 'message': f'地块{site_index}的POI详情不存在'}), 404
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        logger.info(f'获取POI详情: site_index={site_index}')
+        return jsonify(data)
+    except Exception as e:
+        logger.exception('获取POI详情异常')
+        return jsonify({'error': 'server_error', 'detail': str(e)}), 500
+
+
 @app.route('/api/recommendations', methods=['POST'])
 def recommendations():
     try:
@@ -182,28 +214,25 @@ def recommendations():
         requirements = data.get('requirements', '').strip()
         # 文本权重固定为 1.0
         w_text = 1.0
-        # 禁用 SAFE：强制不使用 SAFE 权重
-        w_safe = 0.0
         min_site_candidate_num = int(data.get('top_k', 10))
         city = data.get('city', 'guangzhou')
         type_ = data.get('type', 'zh')
+        # 多目标优化开关（默认启用）
+        enable_multi_objective = data.get('enable_multi_objective', True)
 
         if not requirements:
             logger.warning('推荐请求缺少需求描述')
             return jsonify({"error": "需求描述不能为空"}), 400
 
-        # Load API key from environment
-        api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
-            logger.error('OPENAI_API_KEY 未设置')
-            return jsonify({"error": "OPENAI_API_KEY 未设置，请在环境变量中配置"}), 400
+        # 初始化LLM代理（自动选择DeepSeek或OpenAI）
+        try:
+            proxy = OpenaiCall()  # 自动检测并使用DeepSeek（优先）或OpenAI
+        except ValueError as e:
+            logger.error(f'LLM API配置错误: {e}')
+            return jsonify({"error": f"LLM API未配置: {str(e)}"}), 400
 
-        # 支持通过环境变量设置自定义 Base URL（如国内代理服务）
-        # OpenaiCall 内部也会自动读取 OPENAI_BASE_URL / OPENAI_API_BASE / OPENAI_PROXY_BASE
-        proxy = OpenaiCall(api_key=api_key)
-
-        # 使用带交通与价格指标的真实数据CSV（自动生成同名npy）
-        dataset_csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'land_transactions_with_coordinates_metrics.csv'))
+        # 使用带POI指标的真实数据CSV（自动生成同名npy）
+        dataset_csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'land_transactions_with_poi_v2.csv'))
 
         selector = SiteSelector(
             user_reqs=requirements,
@@ -212,9 +241,8 @@ def recommendations():
             proxy_call=proxy,
             type=type_,
             blend_w_text=w_text,
-            blend_w_safe=w_safe,
-            enable_safe=False,
-            dataset_path=dataset_csv_path
+            dataset_path=dataset_csv_path,
+            enable_multi_objective=enable_multi_objective
         )
 
         logger.info('开始生成推荐: city=%s top_k=%s', city, min_site_candidate_num)
@@ -230,6 +258,6 @@ def recommendations():
 
 if __name__ == '__main__':
     # Allow port override via env
-    port = int(os.environ.get('PORT', '8000'))
+    port = int(os.environ.get('PORT', '8001'))
     logger.info('服务启动: port=%d', port)
     app.run(host='0.0.0.0', port=port, debug=True)

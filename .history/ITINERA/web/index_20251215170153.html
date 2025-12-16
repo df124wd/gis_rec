@@ -470,7 +470,6 @@
                 ${riskHtml}
               </div>
             </div>
-            <button class="poi-btn" onclick="showPoiDetails(${s.site_index}, '${shortName.replace(/'/g, "\\'")}')">📍 查看周边详情</button>
           `;
           
           card.onclick = () => {
@@ -498,7 +497,7 @@
         const payload = {
           requirements: document.getElementById('requirements').value,
           city: document.getElementById('city').value,
-          top_k: 5,  // 推荐5个地块
+          top_k: 10,
           type: 'zh'
         };
 
@@ -575,92 +574,6 @@
       document.getElementById('searchBtn').onclick = searchPlace;
       document.getElementById('placeSearch').addEventListener('keydown', (e) => { 
         if (e.key === 'Enter') searchPlace(); 
-      });
-      
-      // POI详情功能
-      window.showPoiDetails = async function(siteIndex, siteName) {
-        const modal = document.getElementById('poiModal');
-        const title = document.getElementById('poiTitle');
-        const body = document.getElementById('poiBody');
-        
-        title.textContent = `📍 ${siteName} - 周边详情`;
-        body.innerHTML = '<div style="text-align:center;padding:40px;color:#999;">加载中...</div>';
-        modal.classList.add('show');
-        
-        try {
-          const resp = await fetch(`/api/poi_details/${siteIndex}`);
-          if (!resp.ok) throw new Error('获取失败');
-          const data = await resp.json();
-          
-          // 渲染评分
-          const scores = data.scores || {};
-          let scoresHtml = '<div class="poi-scores">';
-          const scoreLabels = {交通: '🚇', 生活: '🏪', 教育: '🎓', 产业: '🏭', 商业: '🏢'};
-          for (const [k, v] of Object.entries(scores)) {
-            scoresHtml += `<div class="poi-score-item"><div class="poi-score-label">${scoreLabels[k] || ''} ${k}</div><div class="poi-score-value">${v.toFixed(1)}</div></div>`;
-          }
-          scoresHtml += '</div>';
-          
-          // 按类别分组POI
-          const details = data.poi_details || {};
-          const categories = {
-            '交通设施': ['地铁站', '公交站', '停车场', '火车站', '高速出入口'],
-            '生活配套': ['银行', '超市', '餐饮', '医院', '药店'],
-            '教育资源': ['高校', '中小学'],
-            '产业配套': ['物流园', '工业园'],
-            '商业环境': ['写字楼', '酒店']
-          };
-          
-          let categoriesHtml = '';
-          for (const [catName, types] of Object.entries(categories)) {
-            let typesHtml = '';
-            for (const t of types) {
-              const info = details[t];
-              if (!info) continue;
-              const count = info.count || 0;
-              const minDist = info.min_distance;
-              const radius = info.radius || 0;
-              const distStr = minDist ? `最近${minDist}m` : '无';
-              
-              typesHtml += `<div class="poi-type-row">
-                <span class="poi-type-name">${t} (${radius/1000}km内)</span>
-                <span class="poi-type-stats">${count}个 | ${distStr}</span>
-              </div>`;
-              
-              // 显示前3个POI名称
-              const items = info.items || [];
-              if (items.length > 0) {
-                typesHtml += '<div class="poi-items">';
-                items.slice(0, 3).forEach(item => {
-                  typesHtml += `<div class="poi-item">• ${item.name}${item.distance ? ` (${item.distance}m)` : ''}</div>`;
-                });
-                if (items.length > 3) typesHtml += `<div class="poi-item" style="color:#999;">...还有${items.length - 3}个</div>`;
-                typesHtml += '</div>';
-              }
-            }
-            
-            if (typesHtml) {
-              categoriesHtml += `<div class="poi-category">
-                <div class="poi-cat-header">${catName}</div>
-                <div class="poi-cat-body">${typesHtml}</div>
-              </div>`;
-            }
-          }
-          
-          body.innerHTML = scoresHtml + categoriesHtml;
-          
-        } catch (e) {
-          body.innerHTML = `<div style="text-align:center;padding:40px;color:#ff4d4f;">加载失败: ${e.message}</div>`;
-        }
-      };
-      
-      window.closePoiModal = function() {
-        document.getElementById('poiModal').classList.remove('show');
-      };
-      
-      // 点击弹窗外部关闭
-      document.getElementById('poiModal').addEventListener('click', function(e) {
-        if (e.target === this) closePoiModal();
       });
     </script>
   </body>

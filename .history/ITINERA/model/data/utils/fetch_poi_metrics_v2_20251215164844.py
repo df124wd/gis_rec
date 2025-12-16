@@ -1,0 +1,366 @@
+# encoding:utf-8
+"""
+高德地图周边搜索API - 地块周边POI数据获取工具 v2
+
+功能：
+1. 获取地块周边各类POI数据
+2. 计算各维度评分（交通、生活、教育、产业、商业）
+3. 输出POI详情JSON文件供前端展示
+
+高德地图周边搜索API文档：
+https://lbs.amap.com/api/webservice/guide/api/newpoisearch
+
+使用方法：
+    python fetch_poi_metrics_v2.py
+"""
+
+import os
+import json
+import time
+import requests
+import pandas as pd
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass, field
+from datetime import datetime
+
+# ============================================================
+# 高德地图API配置
+# ============================================================
+AMAP_KEY = "52fe59f6fa4c4000739004426942af84"
+AMAP_API_URL = "https://restapi.amap.com/v5/place/around"
+
+# API限流配置
+API_RATE_LIMIT = 0.3      # 每次API请求间隔（秒）
+SITE_INTERVAL = 2.0       # 每个地块处理完后等待（秒）
+MAX_RETRIES = 3
+
+# ============================================================
+# POI类型配置
+# 高德地图POI分类编码参考：https://lbs.amap.com/api/webservice/download
+# ============================================================
+POI_TYPES = [
+    # (类型名, POI类型编码, 半径, 类别)
+    # 交通设施
+    ("地铁站", "150500", 1500, "交通"),      # 地铁站
+    ("公交站", "150700", 500, "交通"),       # 公交站
+    ("停车场", "150900", 1000, "交通"),      # 停车场
+    ("火车站", "150200", 5000, "交通"),      # 火车站
+    ("高速出入口", "150302", 5000, "交通"),  # 高速公路出入口
+    # 生活服务
+    ("银行", "160100", 1000, "生活"),        # 银行
+    ("超市", "060400", 1000, "生活"),        # 超市
+    ("餐饮", "050000", 500, "生活"),         # 餐饮服务
+    ("医院", "090100", 3000, "生活"),        # 综合医院
+    ("药店", "090600", 1000, "生活"),        # 药店
+    # 教育
+    ("高校", "141201", 5000, "教育"),        # 高等院校
+    ("中小学", "141203", 2000, "教育"),      # 中学
+    # 产业
+    ("物流园", "170200", 5000, "产业"),      # 物流速递
+    ("工业园", "170100", 5000, "产业"),      # 工厂
+    # 商业
+    ("写字楼", "120201", 2000, "商业"),      # 写字楼
+    ("酒店", "100000", 2000, "商业"),        # 住宿服务
+]
+
+
+def search_around_poi(lon: float, lat: float, poi_type: str, radius: int,
+                      page_num: int = 1, page_size: int = 25) -> dict:
+    """
+    高德地图周边搜索API
+    
+    Args:
+        lon: 经度 (WGS84)
+        lat: 纬度
+        poi_type: POI类型编码
+        radius: 搜索半径（米），最大50000
+        page_num: 页码，从1开始
+        page_size: 每页数量，最大25
+    
+    Returns:
+        API响应JSON
+    """
+    params = {
+        "key": AMAP_KEY,
+        "location": f"{lon},{lat}",
+        "types": poi_type,
+        "radius": str(radius),
+        "sortrule": "distance",
+        "page_num": str(page_num),
+        "page_size": str(page_size),
+        "show_fields": "business",
+    }
+    
+    for retry in range(MAX_RETRIES):
+        try:
+            response = requests.get(AMAP_API_URL, params=params, timeout=15)
+            result = response.json()
+            
+            if result.get("status") == "1":
+                return result
+            else:
+                infocode = result.get("infocode", "")
+                if infocode == "10003":
+                    print(f"[配额超限]", end=" ")
+                    return {"status": "0", "pois": [], "count": "0"}
+                elif infocode == "10004":
+                    print(f"[限流]", end=" ", flush=True)
+                    time.sleep(2)
+                    continue
+                else:
+                    return {"status": "0", "pois": [], "count": "0"}
+        except Exception as e:
+            print(f"[异常:{e}]", end=" ")
+            time.sleep(1)
+    
+    return {"status": "0", "pois": [], "count": "0"}
+
+
+def get_pois_with_details(lon: float, lat: float, poi_type: str, radius: int,
+                          max_pages: int = 3) -> Tuple[int, Optional[float], List[dict]]:
+    """获取POI统计和详情"""
+    all_pois = []
+    page_num = 1
+    
+    while page_num <= max_pages:
+        result = search_around_poi(lon, lat, poi_type, radius, page_num)
+        
+        if result.get("status") != "1":
+            break
+        
+        pois = result.get("pois", [])
+        if not pois:
+            break
+        
+        for poi in pois:
+            distance = poi.get("distance")
+            poi_info = {
+                "name": poi.get("name", ""),
+                "address": poi.get("address", ""),
+                "location": poi.get("location", ""),
+                "distance": int(distance) if distance else None,
+                "tel": poi.get("tel", ""),
+                "type": poi.get("type", ""),
+            }
+            
+            if poi_info["distance"] is not None and poi_info["distance"] <= radius:
+                all_pois.append(poi_info)
+            elif poi_info["distance"] is None:
+                all_pois.append(poi_info)
+        
+        total = int(result.get("count", 0))
+        if len(all_pois) >= total or len(pois) < 25:
+            break
+        
+        page_num += 1
+        time.sleep(API_RATE_LIMIT)
+    
+    count = len(all_pois)
+    min_dist = None
+    for p in all_pois:
+        if p["distance"] is not None:
+            if min_dist is None or p["distance"] < min_dist:
+                min_dist = p["distance"]
+    
+    return count, min_dist, all_pois
+
+
+@dataclass
+class SiteMetrics:
+    """地块POI指标"""
+    index: int
+    name: str
+    lat: float
+    lon: float
+    poi_data: Dict[str, dict] = field(default_factory=dict)
+    traffic_score: float = 0.0
+    life_score: float = 0.0
+    education_score: float = 0.0
+    industry_score: float = 0.0
+    business_score: float = 0.0
+
+
+def process_single_site(idx: int, row: pd.Series) -> SiteMetrics:
+    """处理单个地块的POI数据"""
+    lat = float(row["lat"])
+    lon = float(row["lon"])
+    name = str(row.get("宗地坐落", f"地块{idx}"))[:40]
+    
+    print(f"\n[{idx+1}] {name}")
+    print(f"    坐标: ({lat:.6f}, {lon:.6f})")
+    
+    metrics = SiteMetrics(index=idx, name=name, lat=lat, lon=lon)
+    
+    current_category = None
+    for poi_name, poi_type, radius, category in POI_TYPES:
+        if category != current_category:
+            if current_category is not None:
+                print()
+            print(f"    [{category}]", end=" ")
+            current_category = category
+        
+        count, min_dist, pois = get_pois_with_details(lon, lat, poi_type, radius)
+        
+        metrics.poi_data[poi_name] = {
+            "count": count,
+            "min_distance": min_dist,
+            "radius": radius,
+            "pois": pois
+        }
+        
+        print(f"{poi_name}:{count}", end=" ", flush=True)
+        time.sleep(API_RATE_LIMIT)
+    
+    print()
+    calculate_scores(metrics)
+    print(f"    [评分] 交通:{metrics.traffic_score:.1f} 生活:{metrics.life_score:.1f} "
+          f"教育:{metrics.education_score:.1f} 产业:{metrics.industry_score:.1f} "
+          f"商业:{metrics.business_score:.1f}")
+    
+    return metrics
+
+
+def calculate_scores(metrics: SiteMetrics):
+    """计算各维度评分（0-10分）"""
+    data = metrics.poi_data
+    
+    # 交通便利性评分
+    traffic = 0.0
+    if data.get("地铁站", {}).get("count", 0) > 0:
+        traffic += 3.0
+        dist = data["地铁站"].get("min_distance")
+        if dist and dist < 500:
+            traffic += 1.5
+        elif dist and dist < 1000:
+            traffic += 0.8
+    if data.get("公交站", {}).get("count", 0) > 0:
+        traffic += 1.5
+        if data["公交站"]["count"] >= 3:
+            traffic += 0.5
+    if data.get("停车场", {}).get("count", 0) > 0:
+        traffic += 0.8
+        if data["停车场"]["count"] >= 5:
+            traffic += 0.3
+    if data.get("火车站", {}).get("count", 0) > 0:
+        traffic += 1.0
+        dist = data["火车站"].get("min_distance")
+        if dist and dist < 2000:
+            traffic += 0.5
+    if data.get("高速出入口", {}).get("count", 0) > 0:
+        traffic += 1.2
+        dist = data["高速出入口"].get("min_distance")
+        if dist and dist < 3000:
+            traffic += 0.5
+    metrics.traffic_score = min(traffic, 10.0)
+    
+    # 生活配套评分
+    life = 0.0
+    if data.get("银行", {}).get("count", 0) > 0:
+        life += 1.0
+    if data.get("超市", {}).get("count", 0) > 0:
+        life += 1.5
+        if data["超市"]["count"] >= 3:
+            life += 0.5
+    if data.get("餐饮", {}).get("count", 0) > 0:
+        life += 2.0
+        if data["餐饮"]["count"] >= 5:
+            life += 1.0
+    if data.get("医院", {}).get("count", 0) > 0:
+        life += 2.0
+        dist = data["医院"].get("min_distance")
+        if dist and dist < 1500:
+            life += 0.5
+    if data.get("药店", {}).get("count", 0) > 0:
+        life += 0.5
+    metrics.life_score = min(life, 10.0)
+    
+    # 教育资源评分
+    education = 0.0
+    if data.get("高校", {}).get("count", 0) > 0:
+        education += 4.0
+        if data["高校"]["count"] >= 2:
+            education += 2.0
+    if data.get("中小学", {}).get("count", 0) > 0:
+        education += 2.0
+        if data["中小学"]["count"] >= 3:
+            education += 1.0
+    metrics.education_score = min(education, 10.0)
+    
+    # 产业配套评分
+    industry = 0.0
+    if data.get("物流园", {}).get("count", 0) > 0:
+        industry += 3.0
+        dist = data["物流园"].get("min_distance")
+        if dist and dist < 3000:
+            industry += 1.0
+    if data.get("工业园", {}).get("count", 0) > 0:
+        industry += 3.0
+        if data["工业园"]["count"] >= 2:
+            industry += 1.0
+    metrics.industry_score = min(industry, 10.0)
+    
+    # 商业环境评分
+    business = 0.0
+    if data.get("写字楼", {}).get("count", 0) > 0:
+        business += 3.0
+        if data["写字楼"]["count"] >= 5:
+            business += 1.0
+    if data.get("酒店", {}).get("count", 0) > 0:
+        business += 2.5
+        if data["酒店"]["count"] >= 3:
+            business += 0.5
+    metrics.business_score = min(business, 10.0)
+
+
+def metrics_to_csv_row(metrics: SiteMetrics) -> dict:
+    """转换为CSV行数据"""
+    data = metrics.poi_data
+    
+    def get_names(poi_type: str, limit: int = 3) -> str:
+        pois = data.get(poi_type, {}).get("pois", [])
+        names = [p["name"] for p in pois[:limit] if p.get("name")]
+        return "|".join(names)
+    
+    return {
+        "交通_地铁数量(1.5km)": data.get("地铁站", {}).get("count", 0),
+        "交通_地铁最近距离(m)": data.get("地铁站", {}).get("min_distance"),
+        "交通_地铁站名": get_names("地铁站"),
+        "交通_公交数量(0.5km)": data.get("公交站", {}).get("count", 0),
+        "交通_公交最近距离(m)": data.get("公交站", {}).get("min_distance"),
+        "交通_停车数量(1km)": data.get("停车场", {}).get("count", 0),
+        "交通_停车最近距离(m)": data.get("停车场", {}).get("min_distance"),
+        "交通_火车数量(5km)": data.get("火车站", {}).get("count", 0),
+        "交通_火车最近距离(m)": data.get("火车站", {}).get("min_distance"),
+        "交通_火车站名": get_names("火车站"),
+        "交通_高速数量(5km)": data.get("高速出入口", {}).get("count", 0),
+        "交通_高速最近距离(m)": data.get("高速出入口", {}).get("min_distance"),
+        "交通_便利评分(0-10)": round(metrics.traffic_score, 2),
+        "生活_银行数量(1km)": data.get("银行", {}).get("count", 0),
+        "生活_银行最近距离(m)": data.get("银行", {}).get("min_distance"),
+        "生活_超市数量(1km)": data.get("超市", {}).get("count", 0),
+        "生活_超市最近距离(m)": data.get("超市", {}).get("min_distance"),
+        "生活_餐饮数量(0.5km)": data.get("餐饮", {}).get("count", 0),
+        "生活_餐饮最近距离(m)": data.get("餐饮", {}).get("min_distance"),
+        "生活_医院数量(3km)": data.get("医院", {}).get("count", 0),
+        "生活_医院最近距离(m)": data.get("医院", {}).get("min_distance"),
+        "生活_医院名称": get_names("医院"),
+        "生活_药店数量(1km)": data.get("药店", {}).get("count", 0),
+        "生活_药店最近距离(m)": data.get("药店", {}).get("min_distance"),
+        "生活_便利评分(0-10)": round(metrics.life_score, 2),
+        "教育_高校数量(5km)": data.get("高校", {}).get("count", 0),
+        "教育_高校最近距离(m)": data.get("高校", {}).get("min_distance"),
+        "教育_高校名称": get_names("高校"),
+        "教育_中小学数量(2km)": data.get("中小学", {}).get("count", 0),
+        "教育_中小学最近距离(m)": data.get("中小学", {}).get("min_distance"),
+        "教育_资源评分(0-10)": round(metrics.education_score, 2),
+        "产业_物流园数量(5km)": data.get("物流园", {}).get("count", 0),
+        "产业_物流最近距离(m)": data.get("物流园", {}).get("min_distance"),
+        "产业_工业园数量(5km)": data.get("工业园", {}).get("count", 0),
+        "产业_工业园最近距离(m)": data.get("工业园", {}).get("min_distance"),
+        "产业_配套评分(0-10)": round(metrics.industry_score, 2),
+        "商业_写字楼数量(2km)": data.get("写字楼", {}).get("count", 0),
+        "商业_写字楼最近距离(m)": data.get("写字楼", {}).get("min_distance"),
+        "商业_酒店数量(2km)": data.get("酒店", {}).get("count", 0),
+        "商业_酒店最近距离(m)": data.get("酒店", {}).get("min_distance"),
+        "商业_环境评分(0-10)": round(metrics.business_score, 2),
+    }

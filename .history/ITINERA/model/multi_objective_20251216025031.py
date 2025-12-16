@@ -511,41 +511,23 @@ def run_nsga2_optimization(candidate_data: pd.DataFrame,
     for idx in best_solution:
         row = filtered_data.iloc[idx]
         
-        # 计算加权总分（使用原始0-10分值，与site_selector.composite_score一致）
+        # 计算加权总分
         total_score = 0
         score_breakdown = {}
         
         for j, obj in enumerate(objectives):
             key = obj.get('weight_key', obj['name'])
             weight = weights.get(key, 0.25)
+            normalized = optimizer.obj_values[idx, j]
             
-            # 获取原始分值（已经是0-10范围）
-            raw_value = float(optimizer.obj_raw[idx, j])
-            
-            # 对于价格等"越小越好"的目标，需要转换为"越大越好"的分数
-            if not obj.get('maximize', True):
-                # 价格分数：使用归一化后的值（已在_precompute_objectives中转换）
-                # normalized已经是"越大越好"的形式
-                score_value = optimizer.obj_values[idx, j] * 10
-            else:
-                # 其他目标直接使用原始值（如交通分、区位分已经是0-10）
-                score_value = raw_value
-            
-            # 确保分数在0-10范围内
-            score_value = float(np.clip(score_value, 0.0, 10.0))
-            
-            contribution = weight * score_value
+            contribution = weight * normalized * 10  # 转为0-10分
             total_score += contribution
             
             score_breakdown[key] = {
-                'raw': raw_value,
-                'normalized': float(optimizer.obj_values[idx, j]),
-                'score': score_value,  # 0-10分值
-                'contribution': contribution  # 加权后的贡献
+                'raw': float(optimizer.obj_raw[idx, j]),
+                'normalized': float(normalized),
+                'score': float(contribution)
             }
-        
-        # 确保总分在1-10范围内
-        total_score = float(np.clip(total_score, 1.0, 10.0))
         
         site_scores.append({
             'filtered_idx': int(idx),

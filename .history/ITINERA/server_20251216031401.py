@@ -248,7 +248,7 @@ def recommendations():
             top_k=top_k  # 传入最终推荐数量
         )
 
-        logger.info('开始生成推荐: city=%s top_k=%s candidate_num=%s', city, top_k, min_site_candidate_num)
+        logger.info('开始生成推荐: city=%s top_k=%s', city, min_site_candidate_num)
         result = selector.solve()
         logger.info('推荐生成完成')
         # result is expected to contain: features (GeoJSON-like), center {lon, lat}, sites list, etc.

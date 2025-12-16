@@ -185,28 +185,6 @@ def tiles_img(z, x, y):
 def tiles_cia(z, x, y):
     return _proxy_tianditu('cia_w', z, x, y)
 
-@app.route('/api/poi_details/<int:site_index>', methods=['GET'])
-def get_poi_details(site_index):
-    """获取指定地块的POI详情"""
-    try:
-        poi_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'poi_details'))
-        filename = f"site_{site_index:03d}_poi.json"
-        filepath = os.path.join(poi_dir, filename)
-        
-        if not os.path.exists(filepath):
-            logger.warning(f'POI详情文件不存在: {filepath}')
-            return jsonify({'error': 'not_found', 'message': f'地块{site_index}的POI详情不存在'}), 404
-        
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        logger.info(f'获取POI详情: site_index={site_index}')
-        return jsonify(data)
-    except Exception as e:
-        logger.exception('获取POI详情异常')
-        return jsonify({'error': 'server_error', 'detail': str(e)}), 500
-
-
 @app.route('/api/recommendations', methods=['POST'])
 def recommendations():
     try:
@@ -214,9 +192,7 @@ def recommendations():
         requirements = data.get('requirements', '').strip()
         # 文本权重固定为 1.0
         w_text = 1.0
-        # 子需求检索候选数量固定为10，最终推荐数量由top_k控制（默认5）
-        min_site_candidate_num = 10  # 每个子需求检索10个候选
-        top_k = int(data.get('top_k', 5))  # 最终推荐5个地块
+        min_site_candidate_num = int(data.get('top_k', 10))
         city = data.get('city', 'guangzhou')
         type_ = data.get('type', 'zh')
         # 多目标优化开关（默认启用）
@@ -233,8 +209,8 @@ def recommendations():
             logger.error(f'LLM API配置错误: {e}')
             return jsonify({"error": f"LLM API未配置: {str(e)}"}), 400
 
-        # 使用带POI指标的真实数据CSV（自动生成同名npy）
-        dataset_csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'land_transactions_with_poi_v2.csv'))
+        # 使用带交通与价格指标的真实数据CSV（自动生成同名npy）
+        dataset_csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'land_transactions_with_coordinates_metrics.csv'))
 
         selector = SiteSelector(
             user_reqs=requirements,
@@ -244,11 +220,10 @@ def recommendations():
             type=type_,
             blend_w_text=w_text,
             dataset_path=dataset_csv_path,
-            enable_multi_objective=enable_multi_objective,
-            top_k=top_k  # 传入最终推荐数量
+            enable_multi_objective=enable_multi_objective
         )
 
-        logger.info('开始生成推荐: city=%s top_k=%s candidate_num=%s', city, top_k, min_site_candidate_num)
+        logger.info('开始生成推荐: city=%s top_k=%s', city, min_site_candidate_num)
         result = selector.solve()
         logger.info('推荐生成完成')
         # result is expected to contain: features (GeoJSON-like), center {lon, lat}, sites list, etc.

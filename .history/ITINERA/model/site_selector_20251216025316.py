@@ -64,8 +64,7 @@ class SiteSelector:
                  enable_spatial_optimization=False,
                  min_distance_meters=0, dataset_path=None,
                  enable_struct_filters=False,
-                 enable_multi_objective=True,
-                 top_k=5):
+                 enable_multi_objective=True):
         
         # 核心参数
         # 模型名称由proxy自动选择（DeepSeek或OpenAI）
@@ -95,7 +94,7 @@ class SiteSelector:
         self.load_site_data(city_name=city, dataset_path=dataset_path)
         
         # 初始化检索和空间处理模块
-        self.maxSiteNum = top_k  # 最终推荐数量（由参数控制）
+        self.maxSiteNum = 5  # 最多推荐5个地块（数据量较小时）
         self.search_engine = SearchEngine(
             embedding=self.embedding,
             emb_path=getattr(self, 'emb_path', ''),
@@ -1120,25 +1119,12 @@ class SiteSelector:
         final_ids = []
         final_scores = []
         
-        # 保存分数breakdown供generate_recommendation使用
-        self._nsga2_score_breakdown = {}
-        
         for site in result['recommended_sites']:
             # 获取原始索引
             original_idx = site.get('original_idx')
             if original_idx is not None:
                 final_ids.append(original_idx)
                 final_scores.append(site['total_score'])
-                
-                # 保存分数breakdown（直接使用score字段，已经是0-10分值）
-                breakdown = site.get('breakdown', {})
-                self._nsga2_score_breakdown[original_idx] = {
-                    'traffic': breakdown.get('traffic', {}).get('score', 5.0),
-                    'price': breakdown.get('price', {}).get('score', 5.0),
-                    'area': breakdown.get('area', {}).get('score', 5.0),
-                    'region': breakdown.get('region', {}).get('score', 5.0),
-                    'final_score': site['total_score']
-                }
         
         # 打印结果详情
         print(f"\n[推荐结果详情]")
@@ -1600,51 +1586,38 @@ class SiteSelector:
             for key in default_weights:
                 if key not in weights_poi:
                     weights_poi[key] = default_weights[key]
-            
-            # 预先计算每个地块的最终分
-            # 优先使用NSGA-II返回的分数（如果有），否则重新计算
+            # 预先计算每个地块的最终分（简化版：4指标加权求和）
+            # 公式：总分 = w_traffic*交通分 + w_price*价格分 + w_area*面积分 + w_region*区位分
             score_by_id = {}
             breakdown_by_id = {}
-            nsga2_breakdown = getattr(self, '_nsga2_score_breakdown', {})
             
             for sid in display_ids:
                 sid_int = int(sid)
-                
-                # 优先使用NSGA-II的分数
-                if sid_int in nsga2_breakdown:
-                    bd = nsga2_breakdown[sid_int]
-                    final_s = bd.get('final_score', 5.0)
-                    traffic_s = bd.get('traffic', 5.0)
-                    price_s = bd.get('price', 5.0)
-                    area_s = bd.get('area', 5.0)
-                    region_s = bd.get('region', 5.0)
-                else:
-                    # 回退：重新计算
-                    try:
-                        row = self.site_data.loc[sid_int]
-                        
-                        # 获取4个指标的归一化分数（都是0-10分）
-                        traffic_s = float(row.get('交通_便利评分(0-10)', 5.0))
-                        traffic_s = float(np.clip(traffic_s, 0.0, 10.0))
-                        
-                        price_s = self._price_score(row.get('价格_万元/㎡'))
-                        area_s = self._area_score(row)
-                        
-                        addr = str(row.get('宗地坐落', ''))
-                        region_s = self._region_score(addr)
-                        
-                        # 加权求和
-                        final_s = (
-                            weights_poi.get('traffic', 0.25) * traffic_s +
-                            weights_poi.get('price', 0.25) * price_s +
-                            weights_poi.get('area', 0.25) * area_s +
-                            weights_poi.get('region', 0.25) * region_s
-                        )
-                        final_s = float(np.clip(final_s, 1.0, 10.0))
-                        
-                    except Exception:
-                        final_s = 5.0
-                        traffic_s = price_s = area_s = region_s = 5.0
+                try:
+                    row = self.site_data.loc[sid_int]
+                    
+                    # 获取4个指标的归一化分数（都是0-10分）
+                    traffic_s = float(row.get('交通_便利评分(0-10)', 5.0))
+                    traffic_s = float(np.clip(traffic_s, 0.0, 10.0))
+                    
+                    price_s = self._price_score(row.get('价格_万元/㎡'))
+                    area_s = self._area_score(row)
+                    
+                    addr = str(row.get('宗地坐落', ''))
+                    region_s = self._region_score(addr)
+                    
+                    # 加权求和
+                    final_s = (
+                        weights_poi.get('traffic', 0.25) * traffic_s +
+                        weights_poi.get('price', 0.25) * price_s +
+                        weights_poi.get('area', 0.25) * area_s +
+                        weights_poi.get('region', 0.25) * region_s
+                    )
+                    final_s = float(np.clip(final_s, 1.0, 10.0))
+                    
+                except Exception:
+                    final_s = 5.0
+                    traffic_s = price_s = area_s = region_s = 5.0
                 
                 score_by_id[sid_int] = final_s
                 breakdown_by_id[sid_int] = {
@@ -1654,23 +1627,20 @@ class SiteSelector:
                     'region': region_s,
                     'final_score': final_s
                 }
-            
-            # 不再重新排序，保持NSGA-II返回的顺序（已按总分排序）
-            # 如果没有使用NSGA-II，则按分数排序
-            if not nsga2_breakdown:
-                try:
-                    if self._intent_prioritize_traffic() and ('交通_便利评分(0-10)' in self.site_data.columns):
-                        def traffic_s_func(sid):
-                            try:
-                                v = float(self.site_data.loc[int(sid), '交通_便利评分(0-10)'])
-                                return float(np.clip(v, 0.0, 10.0))
-                            except Exception:
-                                return -float('inf')
-                        display_ids.sort(key=lambda sid: traffic_s_func(sid), reverse=True)
-                    else:
-                        display_ids.sort(key=lambda sid: score_by_id.get(int(sid), -float('inf')), reverse=True)
-                except Exception:
-                    pass
+            # 按最终分排序（高到低）；若显式强调交通便利，则按交通分重排
+            try:
+                if self._intent_prioritize_traffic() and ('交通_便利评分(0-10)' in self.site_data.columns):
+                    def traffic_s(sid):
+                        try:
+                            v = float(self.site_data.loc[int(sid), '交通_便利评分(0-10)'])
+                            return float(np.clip(v, 0.0, 10.0))
+                        except Exception:
+                            return -float('inf')
+                    display_ids.sort(key=lambda sid: traffic_s(sid), reverse=True)
+                else:
+                    display_ids.sort(key=lambda sid: score_by_id.get(int(sid), -float('inf')), reverse=True)
+            except Exception:
+                pass
             # 解释项准备
             debug_scores = {}
             
