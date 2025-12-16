@@ -64,8 +64,7 @@ class SiteSelector:
                  enable_spatial_optimization=False,
                  min_distance_meters=0, dataset_path=None,
                  enable_struct_filters=False,
-                 enable_multi_objective=True,
-                 top_k=5):
+                 enable_multi_objective=True):
         
         # 核心参数
         # 模型名称由proxy自动选择（DeepSeek或OpenAI）
@@ -95,7 +94,7 @@ class SiteSelector:
         self.load_site_data(city_name=city, dataset_path=dataset_path)
         
         # 初始化检索和空间处理模块
-        self.maxSiteNum = top_k  # 最终推荐数量（由参数控制）
+        self.maxSiteNum = 10  # 最多推荐10个地块
         self.search_engine = SearchEngine(
             embedding=self.embedding,
             emb_path=getattr(self, 'emb_path', ''),
@@ -1050,18 +1049,15 @@ class SiteSelector:
 
     def _multi_objective_selection(self, req_topk_sites, pseudo_must_see):
         """
-        NSGA-II 多目标优化选址（完整版）
+        两阶段多目标优化选址
         
-        核心思路：
-        - 一个解 = 一个方案 = 10个地块的组合
-        - 遗传算法进化50代，种群100个方案
-        - 输出帕累托前沿（多个最优权衡方案）
-        - 根据用户偏好选择一个方案，再按总分排序取Top-5
+        阶段1：在语义检索候选基础上做硬约束过滤 + 帕累托前沿筛选（粗筛）
+        阶段2：LLM权重加权排序（精排）
         """
-        from model.multi_objective import run_nsga2_optimization
+        from model.multi_objective import MultiObjectiveOptimizer, HardConstraintParser
         
         print("\n" + "="*80)
-        print("[NSGA-II 多目标优化] 启动...")
+        print("[两阶段多目标优化] 启动...")
         print("="*80)
         
         # ========== 获取语义检索候选地块 ==========
@@ -1087,58 +1083,46 @@ class SiteSelector:
         # ========== 智能解析硬约束 ==========
         executable_constraints = self._derive_executable_constraints()
         
-        # ========== 提取候选地块数据 ==========
+        # ========== 阶段1：在候选基础上做硬约束过滤 + 帕累托前沿 ==========
+        # 提取候选地块数据
         candidate_data = self.site_data.loc[candidate_ids].copy().reset_index(drop=True)
         # 保存原始索引映射
         candidate_data['_original_idx'] = candidate_ids
         
-        # 添加区位分数列（用于优化计算）
+        print(f"\n[阶段1] 硬约束过滤（在{len(candidate_data)}个语义检索候选中）")
+        
+        # 添加区位分数列（用于帕累托计算）
         candidate_data['region_score'] = candidate_data.apply(
             lambda row: self._region_score(str(row.get('宗地坐落', ''))), axis=1
         )
         
-        # ========== 运行NSGA-II优化 ==========
-        # 参数设置：
-        # - n_select=10: 每个方案选择10个地块
-        # - pop_size=100: 种群大小100
-        # - n_generations=50: 进化50代
-        # - top_k=5: 最终推荐5个地块
+        # 创建优化器（使用候选数据而非全量数据）
+        optimizer = MultiObjectiveOptimizer(candidate_data)
         
-        result = run_nsga2_optimization(
-            candidate_data=candidate_data,
+        # 运行两阶段优化
+        result = optimizer.two_stage_optimize(
             objectives=objectives,
             weights=weights,
-            constraints=executable_constraints,
-            n_select=min(10, len(candidate_data)),  # 每方案选10个地块
-            pop_size=100,
-            n_generations=50,
-            top_k=self.maxSiteNum  # 最终推荐数量
+            hard_constraints=executable_constraints,
+            top_k=self.maxSiteNum,
+            min_pareto_size=max(3, self.maxSiteNum)
         )
         
         # ========== 处理结果 ==========
-        # 从推荐结果中提取原始索引和分数
+        # 将filtered_data中的索引映射回原始site_data索引
         final_ids = []
-        final_scores = []
+        final_scores = result['scores']
         
-        # 保存分数breakdown供generate_recommendation使用
-        self._nsga2_score_breakdown = {}
-        
-        for site in result['recommended_sites']:
-            # 获取原始索引
-            original_idx = site.get('original_idx')
-            if original_idx is not None:
+        for filtered_idx in result['selected_indices']:
+            site = optimizer.get_site_by_filtered_index(filtered_idx)
+            if site is not None and '_original_idx' in site:
+                original_idx = int(site['_original_idx'])
                 final_ids.append(original_idx)
-                final_scores.append(site['total_score'])
-                
-                # 保存分数breakdown（直接使用score字段，已经是0-10分值）
-                breakdown = site.get('breakdown', {})
-                self._nsga2_score_breakdown[original_idx] = {
-                    'traffic': breakdown.get('traffic', {}).get('score', 5.0),
-                    'price': breakdown.get('price', {}).get('score', 5.0),
-                    'area': breakdown.get('area', {}).get('score', 5.0),
-                    'region': breakdown.get('region', {}).get('score', 5.0),
-                    'final_score': site['total_score']
-                }
+            else:
+                # 回退：尝试通过名称匹配
+                original_idx = self._find_original_index(site)
+                if original_idx is not None:
+                    final_ids.append(original_idx)
         
         # 打印结果详情
         print(f"\n[推荐结果详情]")
@@ -1158,119 +1142,11 @@ class SiteSelector:
                 print(f"{i+1:<4} [数据读取失败: {e}]")
         
         print("-"*90)
-        
-        # 打印帕累托前沿信息
-        pareto_info = result.get('pareto_info', {})
-        print(f"\n[帕累托前沿] {pareto_info.get('n_solutions', 0)}个非支配方案")
-        print(f"[选中方案] 第{pareto_info.get('selected_idx', 0)}号方案，包含{len(result.get('selected_solution', {}).get('sites', []))}个地块")
-        print(f"[统计] 候选:{result.get('original_count', 0)} → 过滤后:{result.get('filtered_count', 0)} → 最终推荐:{len(final_ids)}")
+        print(f"\n[统计] 原始:{result['original_size']} → 硬约束过滤:{result['filtered_size']} → 帕累托前沿:{result['pareto_size']} → 最终:{len(final_ids)}")
         print("="*80)
         
         clusters = [final_ids]
         return final_ids, final_scores, clusters
-    
-    def _derive_executable_constraints(self) -> list:
-        """
-        智能推导可执行的硬约束
-        使用LLM将用户需求转换为数据库可执行的过滤条件
-        """
-        executable_constraints = []
-        
-        if not hasattr(self, 'hard_constraints') or not self.hard_constraints:
-            return executable_constraints
-        
-        print(f"\n[硬约束智能解析]")
-        print(f"  原始约束: {[c.get('text') for c in self.hard_constraints]}")
-        
-        for c in self.hard_constraints:
-            text = c.get('text', '').strip()
-            ctype = c.get('type', '')
-            is_neg = c.get('is_negative', False)
-            
-            if not text:
-                continue
-            
-            # 1. 区域约束：提取区域名称，模糊匹配宗地坐落
-            if ctype == '区域':
-                # 提取区域关键词
-                districts = ['天河', '越秀', '海珠', '荔湾', '黄埔', 
-                            '白云', '番禺', '花都', '南沙', '增城', '从化']
-                for d in districts:
-                    if d in text:
-                        executable_constraints.append({
-                            'field': '宗地坐落',
-                            'operator': 'not_contains' if is_neg else 'contains',
-                            'value': d,
-                            'original_text': text
-                        })
-                        print(f"  → 区域约束: 宗地坐落 {'不包含' if is_neg else '包含'} '{d}'")
-                        break
-            
-            # 2. 用地类型约束：用LLM推导对应的土地用途
-            elif ctype == '用地类型' or any(k in text for k in ['厂', '工厂', '生产', '仓储', '物流', '商业', '办公', '居住']):
-                # 根据用户描述推导土地用途
-                land_type = self._infer_land_type(text)
-                if land_type:
-                    executable_constraints.append({
-                        'field': '土地用途',
-                        'operator': 'not_contains' if is_neg else 'contains',
-                        'value': land_type,
-                        'original_text': text
-                    })
-                    print(f"  → 用地约束: 土地用途 {'不包含' if is_neg else '包含'} '{land_type}' (推导自'{text}')")
-            
-            # 3. 面积约束
-            elif ctype == '面积':
-                import re
-                number_match = re.search(r'[≥≤>=<]?\s*(\d+(?:\.\d+)?)', text)
-                if number_match:
-                    value = float(number_match.group(1))
-                    # 单位转换
-                    if '亩' in text:
-                        value *= 666.67
-                    elif '公顷' in text:
-                        value *= 10000
-                    
-                    # 操作符
-                    if '≥' in text or '>=' in text or '至少' in text or '不少于' in text or '以上' in text:
-                        op = '>='
-                    elif '≤' in text or '<=' in text or '不超过' in text or '以下' in text:
-                        op = '<='
-                    else:
-                        op = '>='
-                    
-                    executable_constraints.append({
-                        'field': '宗地面积(平方米)',
-                        'operator': op,
-                        'value': value,
-                        'original_text': text
-                    })
-                    print(f"  → 面积约束: 宗地面积 {op} {value:.0f}㎡")
-        
-        print(f"  解析结果: {len(executable_constraints)}个可执行约束")
-        return executable_constraints
-    
-    def _infer_land_type(self, text: str) -> str:
-        """根据用户描述推导土地用途类型"""
-        text_lower = text.lower()
-        
-        # 工业类
-        if any(k in text_lower for k in ['工厂', '生产厂', '制造', '加工', '食品厂', '电子厂', '机械厂']):
-            return '工业'
-        if any(k in text_lower for k in ['仓储', '物流', '仓库', '配送']):
-            return '工业'  # 仓储物流通常也是工业用地
-        
-        # 商业类
-        if any(k in text_lower for k in ['商业', '商场', '购物', '零售', '店铺']):
-            return '商业'
-        if any(k in text_lower for k in ['办公', '写字楼', '总部']):
-            return '商业'  # 办公通常是商业用地
-        
-        # 居住类
-        if any(k in text_lower for k in ['住宅', '居住', '小区', '公寓']):
-            return '居住'
-        
-        return ''
     
     def _find_original_index(self, site_row: pd.Series) -> int:
         """根据地块数据找到原始DataFrame中的索引"""
@@ -1600,51 +1476,38 @@ class SiteSelector:
             for key in default_weights:
                 if key not in weights_poi:
                     weights_poi[key] = default_weights[key]
-            
-            # 预先计算每个地块的最终分
-            # 优先使用NSGA-II返回的分数（如果有），否则重新计算
+            # 预先计算每个地块的最终分（简化版：4指标加权求和）
+            # 公式：总分 = w_traffic*交通分 + w_price*价格分 + w_area*面积分 + w_region*区位分
             score_by_id = {}
             breakdown_by_id = {}
-            nsga2_breakdown = getattr(self, '_nsga2_score_breakdown', {})
             
             for sid in display_ids:
                 sid_int = int(sid)
-                
-                # 优先使用NSGA-II的分数
-                if sid_int in nsga2_breakdown:
-                    bd = nsga2_breakdown[sid_int]
-                    final_s = bd.get('final_score', 5.0)
-                    traffic_s = bd.get('traffic', 5.0)
-                    price_s = bd.get('price', 5.0)
-                    area_s = bd.get('area', 5.0)
-                    region_s = bd.get('region', 5.0)
-                else:
-                    # 回退：重新计算
-                    try:
-                        row = self.site_data.loc[sid_int]
-                        
-                        # 获取4个指标的归一化分数（都是0-10分）
-                        traffic_s = float(row.get('交通_便利评分(0-10)', 5.0))
-                        traffic_s = float(np.clip(traffic_s, 0.0, 10.0))
-                        
-                        price_s = self._price_score(row.get('价格_万元/㎡'))
-                        area_s = self._area_score(row)
-                        
-                        addr = str(row.get('宗地坐落', ''))
-                        region_s = self._region_score(addr)
-                        
-                        # 加权求和
-                        final_s = (
-                            weights_poi.get('traffic', 0.25) * traffic_s +
-                            weights_poi.get('price', 0.25) * price_s +
-                            weights_poi.get('area', 0.25) * area_s +
-                            weights_poi.get('region', 0.25) * region_s
-                        )
-                        final_s = float(np.clip(final_s, 1.0, 10.0))
-                        
-                    except Exception:
-                        final_s = 5.0
-                        traffic_s = price_s = area_s = region_s = 5.0
+                try:
+                    row = self.site_data.loc[sid_int]
+                    
+                    # 获取4个指标的归一化分数（都是0-10分）
+                    traffic_s = float(row.get('交通_便利评分(0-10)', 5.0))
+                    traffic_s = float(np.clip(traffic_s, 0.0, 10.0))
+                    
+                    price_s = self._price_score(row.get('价格_万元/㎡'))
+                    area_s = self._area_score(row)
+                    
+                    addr = str(row.get('宗地坐落', ''))
+                    region_s = self._region_score(addr)
+                    
+                    # 加权求和
+                    final_s = (
+                        weights_poi.get('traffic', 0.25) * traffic_s +
+                        weights_poi.get('price', 0.25) * price_s +
+                        weights_poi.get('area', 0.25) * area_s +
+                        weights_poi.get('region', 0.25) * region_s
+                    )
+                    final_s = float(np.clip(final_s, 1.0, 10.0))
+                    
+                except Exception:
+                    final_s = 5.0
+                    traffic_s = price_s = area_s = region_s = 5.0
                 
                 score_by_id[sid_int] = final_s
                 breakdown_by_id[sid_int] = {
@@ -1654,23 +1517,20 @@ class SiteSelector:
                     'region': region_s,
                     'final_score': final_s
                 }
-            
-            # 不再重新排序，保持NSGA-II返回的顺序（已按总分排序）
-            # 如果没有使用NSGA-II，则按分数排序
-            if not nsga2_breakdown:
-                try:
-                    if self._intent_prioritize_traffic() and ('交通_便利评分(0-10)' in self.site_data.columns):
-                        def traffic_s_func(sid):
-                            try:
-                                v = float(self.site_data.loc[int(sid), '交通_便利评分(0-10)'])
-                                return float(np.clip(v, 0.0, 10.0))
-                            except Exception:
-                                return -float('inf')
-                        display_ids.sort(key=lambda sid: traffic_s_func(sid), reverse=True)
-                    else:
-                        display_ids.sort(key=lambda sid: score_by_id.get(int(sid), -float('inf')), reverse=True)
-                except Exception:
-                    pass
+            # 按最终分排序（高到低）；若显式强调交通便利，则按交通分重排
+            try:
+                if self._intent_prioritize_traffic() and ('交通_便利评分(0-10)' in self.site_data.columns):
+                    def traffic_s(sid):
+                        try:
+                            v = float(self.site_data.loc[int(sid), '交通_便利评分(0-10)'])
+                            return float(np.clip(v, 0.0, 10.0))
+                        except Exception:
+                            return -float('inf')
+                    display_ids.sort(key=lambda sid: traffic_s(sid), reverse=True)
+                else:
+                    display_ids.sort(key=lambda sid: score_by_id.get(int(sid), -float('inf')), reverse=True)
+            except Exception:
+                pass
             # 解释项准备
             debug_scores = {}
             

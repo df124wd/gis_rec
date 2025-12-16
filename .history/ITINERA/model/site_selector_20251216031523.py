@@ -1130,13 +1130,13 @@ class SiteSelector:
                 final_ids.append(original_idx)
                 final_scores.append(site['total_score'])
                 
-                # 保存分数breakdown（直接使用score字段，已经是0-10分值）
+                # 保存分数breakdown
                 breakdown = site.get('breakdown', {})
                 self._nsga2_score_breakdown[original_idx] = {
-                    'traffic': breakdown.get('traffic', {}).get('score', 5.0),
-                    'price': breakdown.get('price', {}).get('score', 5.0),
-                    'area': breakdown.get('area', {}).get('score', 5.0),
-                    'region': breakdown.get('region', {}).get('score', 5.0),
+                    'traffic': breakdown.get('traffic', {}).get('raw', 5.0),
+                    'price': breakdown.get('price', {}).get('score', 5.0) / weights.get('price', 0.25) if weights.get('price', 0.25) > 0 else 5.0,
+                    'area': breakdown.get('area', {}).get('score', 5.0) / weights.get('area', 0.25) if weights.get('area', 0.25) > 0 else 5.0,
+                    'region': breakdown.get('region', {}).get('raw', 5.0),
                     'final_score': site['total_score']
                 }
         
