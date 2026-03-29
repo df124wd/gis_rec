@@ -62,7 +62,7 @@ def recommend_with_pareto(user_reqs: str,
     print("\nStep 2: 语义检索候选地块...")
     req_topk_sites, pseudo_must_see = selector.get_candidate_sites()
     candidate_ids = req_topk_sites[:, 0].astype(int).tolist()
-    print(f"✓ 检索到 {len(candidate_ids)} 个候选地块")
+    print(f"[OK] 检索到 {len(candidate_ids)} 个候选地块")
     
     # Step 3: 多目标优化（可选）
     if use_pareto:
@@ -80,7 +80,7 @@ def recommend_with_pareto(user_reqs: str,
         
         # 计算帕累托前沿
         pareto_indices = optimizer.pareto_front(objectives, candidate_ids)
-        print(f"✓ 帕累托前沿包含 {len(pareto_indices)} 个地块")
+        print(f"[OK] 帕累托前沿包含 {len(pareto_indices)} 个地块")
         
         # 解释帕累托前沿
         explanation = optimizer.explain_pareto(pareto_indices, objectives)
@@ -104,14 +104,14 @@ def recommend_with_pareto(user_reqs: str,
         final_ids = [idx for idx, score in ranked[:top_k]]
         final_scores = [score for idx, score in ranked[:top_k]]
         
-        print(f"\n✓ 从帕累托前沿中选择Top-{len(final_ids)}地块")
+        print(f"\n[OK] 从帕累托前沿中选择Top-{len(final_ids)}地块")
         
     else:
         print("\nStep 3: 简单排序...")
         # 使用原始评分排序
         final_ids = candidate_ids[:top_k]
         final_scores = req_topk_sites[:top_k, 1].tolist()
-        print(f"✓ 按语义相似度选择Top-{len(final_ids)}地块")
+        print(f"[OK] 按语义相似度选择Top-{len(final_ids)}地块")
     
     # Step 4: 生成推荐报告
     print("\nStep 4: 生成推荐报告...")
@@ -141,7 +141,7 @@ def recommend_with_pareto(user_reqs: str,
             'context': row['context']
         })
     
-    print(f"✓ 生成 {len(recommendations)} 条推荐")
+    print(f"[OK] 生成 {len(recommendations)} 条推荐")
     
     # Step 5: 展示结果
     print("\n" + "=" * 60)

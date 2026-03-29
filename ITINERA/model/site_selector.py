@@ -1802,11 +1802,11 @@ class SiteSelector:
                     try:
                         res = future.result()
                         llm_results[res['index']] = res
-                        status = "✓" if res.get('success') else "✗"
+                        status = "OK" if res.get('success') else "X"
                         print(f"  [{status}] 地块{res['index']+1} 分析完成")
                     except Exception as e:
                         info = future_to_info[future]
-                        print(f"  [✗] 地块{info['index']+1} 分析异常: {e}")
+                        print(f"  [X] 地块{info['index']+1} 分析异常: {e}")
             
             print(f"[并发LLM] 完成，成功{sum(1 for r in llm_results.values() if r.get('success'))}个")
             
@@ -1961,15 +1961,15 @@ class SiteSelector:
         
         print("Step 1: 检索候选地块...")
         req_topk_sites, pseudo_must_see = self.get_candidate_sites()
-        print(f"✓ 找到 {len(req_topk_sites)} 个候选地块")
+        print(f"[OK] 找到 {len(req_topk_sites)} 个候选地块")
         
         print("Step 2: 空间优化选址...")
         if not self.enable_spatial_optimization:
-            print("✓ 按评分直接选取Top-K")
+            print("[OK] 按评分直接选取Top-K")
         sites, scores, clusters = self.optimize_site_selection(
             req_topk_sites, pseudo_must_see
         )
-        print(f"✓ 保留 {len(sites)} 个地块")
+        print(f"[OK] 保留 {len(sites)} 个地块")
 
         # —— 打印POI与规则算分（综合分拆解 + 结构化满足度 + 核心POI指标）——
         try:
@@ -2053,6 +2053,10 @@ class SiteSelector:
         print("\n" + "=" * 60)
         print("推荐结果：")
         print("=" * 60)
-        print(json.dumps(recommendation, ensure_ascii=False, indent=2))
+        try:
+            print(json.dumps(recommendation, ensure_ascii=False, indent=2))
+        except UnicodeEncodeError:
+            # Windows GBK编码不支持emoji，回退到ASCII
+            print(json.dumps(recommendation, ensure_ascii=True, indent=2))
         
         return recommendation

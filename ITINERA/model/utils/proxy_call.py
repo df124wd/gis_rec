@@ -185,7 +185,7 @@ class OpenaiCall:
                             cache_folder=os.path.expanduser('~/.cache/huggingface/hub'),
                             device='cpu'
                         )
-                        print(f"[Embedding] ✓ 模型加载成功 (离线模式)")
+                        print(f"[Embedding] [OK] 模型加载成功 (离线模式)")
                     except Exception as e:
                         # 如果离线模式失败，尝试在线模式（使用镜像）
                         print(f"[Embedding] 离线加载失败，尝试在线模式: {e}")
@@ -193,7 +193,7 @@ class OpenaiCall:
                         os.environ['HF_HUB_OFFLINE'] = '0'
                         huggingface_hub.constants.HF_HUB_OFFLINE = False
                         _global_model = SentenceTransformer(model_name)
-                        print(f"[Embedding] ✓ 模型加载成功 (在线模式)")
+                        print(f"[Embedding] [OK] 模型加载成功 (在线模式)")
         
         self._local_model = _global_model
         

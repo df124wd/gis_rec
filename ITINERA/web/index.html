@@ -150,6 +150,148 @@
         transition: all 0.2s;
       }
       .poi-btn:hover { background: #e6f4ff; border-color: #1677ff; }
+
+      /* 缓冲圈按钮组 */
+      .buffer-btns {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+        flex-wrap: wrap;
+      }
+      .buffer-btn {
+        padding: 4px 10px;
+        background: #fff;
+        border: 1px solid #d9d9d9;
+        border-radius: 4px;
+        color: #666;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .buffer-btn:hover { border-color: #1677ff; color: #1677ff; }
+      .buffer-btn.active {
+        background: #1677ff;
+        border-color: #1677ff;
+        color: #fff;
+      }
+      .buffer-btn-1km.active { background: #52c41a; border-color: #52c41a; }
+      .buffer-btn-3km.active { background: #fa8c16; border-color: #fa8c16; }
+      .buffer-btn-5km.active { background: #ff4d4f; border-color: #ff4d4f; }
+
+      /* 缓冲圈图例 */
+      .buffer-legend {
+        position: absolute;
+        bottom: 20px;
+        left: 20px;
+        background: rgba(255,255,255,0.95);
+        padding: 10px 14px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        font-size: 12px;
+        z-index: 100;
+      }
+      .buffer-legend-title {
+        font-weight: 600;
+        margin-bottom: 6px;
+        color: #333;
+      }
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      .legend-color {
+        width: 24px;
+        height: 12px;
+        border-radius: 2px;
+      }
+      .legend-1km { background: rgba(82, 196, 26, 0.25); border: 2px solid #52c41a; }
+      .legend-3km { background: rgba(250, 140, 22, 0.2); border: 2px solid #fa8c16; }
+      .legend-5km { background: rgba(255, 77, 79, 0.15); border: 2px solid #ff4d4f; }
+
+      /* 满足条件清单 */
+      .conditions-list {
+        margin-top: 8px;
+        padding: 8px 10px;
+        background: #f6ffed;
+        border: 1px solid #b7eb8f;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      .conditions-title {
+        font-weight: 600;
+        color: #52c41a;
+        margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .conditions-items {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .condition-tag {
+        padding: 2px 8px;
+        background: #fff;
+        border: 1px solid #d9f7be;
+        border-radius: 4px;
+        color: #52c41a;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .condition-tag.fail {
+        background: #fff1f0;
+        border-color: #ffccc7;
+        color: #ff4d4f;
+      }
+      .condition-tag-label {
+        color: #999;
+        font-size: 11px;
+        margin-right: 4px;
+      }
+
+      /* POI地图标记图例 */
+      .poi-legend {
+        position: absolute;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(255,255,255,0.95);
+        padding: 10px 14px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        font-size: 12px;
+        z-index: 101;
+      }
+      .poi-legend-title {
+        font-weight: 600;
+        margin-bottom: 6px;
+        color: #333;
+      }
+      .poi-legend-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 3px;
+        font-size: 11px;
+      }
+      .poi-icon {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 10px;
+        font-weight: bold;
+      }
+      .poi-icon-subway { background: #1677ff; }
+      .poi-icon-hospital { background: #ff4d4f; }
+      .poi-icon-school { background: #52c41a; }
+      .poi-icon-shop { background: #fa8c16; }
+      .poi-icon-station { background: #9254de; }
       
       /* POI详情弹窗 */
       .poi-modal {
@@ -243,6 +385,7 @@
         <button id="runBtn">生成推荐</button>
         <input id="placeSearch" type="text" placeholder="搜索地名（如：广州塔）" style="width:180px" />
         <button id="searchBtn">搜索</button>
+        <button id="clearBufferBtn" style="background:#52c41a;display:none;" onclick="clearAllBuffersBtn()">清除缓冲圈</button>
       </header>
       
       <!-- 需求解析面板 -->
@@ -256,8 +399,50 @@
           <div class="weight-bar" id="weightBar"></div>
         </div>
       </div>
-      
-      <div id="map"></div>
+
+      <div id="map">
+        <!-- 缓冲圈图例 -->
+        <div class="buffer-legend" id="bufferLegend" style="display:none;">
+          <div class="buffer-legend-title">📍 缓冲圈图例</div>
+          <div class="legend-item">
+            <div class="legend-color legend-1km"></div>
+            <span>1km 生活圈</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color legend-3km"></div>
+            <span>3km 通勤圈</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color legend-5km"></div>
+            <span>5km 物流圈</span>
+          </div>
+        </div>
+        <!-- POI标记图例 -->
+        <div class="poi-legend" id="poiLegend" style="display:none;">
+          <div class="poi-legend-title">🗺️ 周边设施</div>
+          <div class="poi-legend-item">
+            <div class="poi-icon poi-icon-subway">🚇</div>
+            <span>地铁站</span>
+          </div>
+          <div class="poi-legend-item">
+            <div class="poi-icon poi-icon-hospital">🏥</div>
+            <span>医院</span>
+          </div>
+          <div class="poi-legend-item">
+            <div class="poi-icon poi-icon-school">🎓</div>
+            <span>学校</span>
+          </div>
+          <div class="poi-legend-item">
+            <div class="poi-icon poi-icon-shop">🏪</div>
+            <span>超市/餐饮</span>
+          </div>
+          <div class="poi-legend-item">
+            <div class="poi-icon poi-icon-station">🚉</div>
+            <span>火车站</span>
+          </div>
+          <button onclick="window.clearPOIMarkers()" style="margin-top:6px;padding:4px 8px;font-size:11px;cursor:pointer;background:#f5f5f5;border:1px solid #ddd;border-radius:3px;">清除标记</button>
+        </div>
+      </div>
     </div>
     
     <div class="sidebar" id="sidebar" hidden>
@@ -285,7 +470,7 @@
     </script>
 
     <script type="module">
-      import Map from '/static/lib/ol/Map.js';
+      import OlMap from '/static/lib/ol/Map.js';
       import View from '/static/lib/ol/View.js';
       import TileLayer from '/static/lib/ol/layer/Tile.js';
       import VectorLayer from '/static/lib/ol/layer/Vector.js';
@@ -294,6 +479,7 @@
       import {fromLonLat} from '/static/lib/ol/proj.js';
       import Feature from '/static/lib/ol/Feature.js';
       import Point from '/static/lib/ol/geom/Point.js';
+      import Circle from '/static/lib/ol/geom/Circle.js';
       import Style from '/static/lib/ol/style/Style.js';
       import Fill from '/static/lib/ol/style/Fill.js';
       import Stroke from '/static/lib/ol/style/Stroke.js';
@@ -301,17 +487,24 @@
 
       let map = null;
       let vectorSource = null;
+      let bufferSource = null;  // 缓冲圈数据源
+      let poiSource = null;  // POI标记数据源
       let hasMap = false;
       let searchMarker = null;
+      let currentPoiSiteId = null;  // 当前显示POI的地块ID
+      // 存储当前显示的缓冲圈
+      window.currentBufferFeatures = new Map();
 
       async function initMap() {
         vectorSource = new VectorSource();
+        bufferSource = new VectorSource();
+        poiSource = new VectorSource();
         try {
-          const base = new TileLayer({ 
+          const base = new TileLayer({
             source: new XYZ({ url: '/tiles/img/{z}/{x}/{y}', crossOrigin: 'anonymous' })
           });
-          const labels = new TileLayer({ 
-            source: new XYZ({ url: '/tiles/cia/{z}/{x}/{y}', crossOrigin: 'anonymous' }) 
+          const labels = new TileLayer({
+            source: new XYZ({ url: '/tiles/cia/{z}/{x}/{y}', crossOrigin: 'anonymous' })
           });
           const plotLayer = new VectorLayer({
             source: vectorSource,
@@ -320,9 +513,44 @@
               stroke: new Stroke({ color: '#1677ff', width: 2 })
             })
           });
-          map = new Map({
+          // 缓冲圈图层
+          const bufferLayer = new VectorLayer({
+            source: bufferSource,
+            style: function(feature) {
+              const radius = feature.get('radius') || (feature.getGeometry() && feature.getGeometry().getRadius());
+              const colors = {
+                1000: { fill: 'rgba(82, 196, 26, 0.25)', stroke: '#52c41a' },
+                3000: { fill: 'rgba(250, 140, 22, 0.2)', stroke: '#fa8c16' },
+                5000: { fill: 'rgba(255, 77, 79, 0.15)', stroke: '#ff4d4f' }
+              };
+              const color = colors[radius] || { fill: 'rgba(22, 119, 255, 0.15)', stroke: '#1677ff' };
+              return new Style({
+                fill: new Fill({ color: color.fill }),
+                stroke: new Stroke({ color: color.stroke, width: 2, lineDash: [8, 4] })
+              });
+            }
+          });
+          // POI标记图层
+          const poiLayer = new VectorLayer({
+            source: poiSource,
+            style: function(feature) {
+              const type = feature.get('poiType');
+              const colors = {
+                'subway': '#1677ff',
+                'hospital': '#ff4d4f',
+                'school': '#52c41a',
+                'shop': '#fa8c16',
+                'station': '#9254de'
+              };
+              const color = colors[type] || '#999';
+              return new Style({
+                image: new CircleStyle({ radius: 6, fill: new Fill({ color }), stroke: new Stroke({ color: '#fff', width: 2 }) })
+              });
+            }
+          });
+          map = new OlMap({
             target: 'map',
-            layers: [base, labels, plotLayer],
+            layers: [base, labels, plotLayer, bufferLayer, poiLayer],
             view: new View({ center: fromLonLat([113.2644, 23.1291]), zoom: 12 })
           });
           hasMap = true;
@@ -344,6 +572,256 @@
         }));
         return feat;
       }
+
+      // 绘制圆形缓冲区
+      function createBufferCircle(lon, lat, radiusMeters, siteId) {
+        if (!hasMap) return null;
+        const center = fromLonLat([lon, lat]);
+        const circle = new Circle(center, radiusMeters);
+        const feature = new Feature({
+          geometry: circle,
+          radius: radiusMeters,
+          siteId: siteId
+        });
+        return feature;
+      }
+
+      // 切换缓冲区显示
+      window.toggleBuffer = function(siteId, lon, lat, radius) {
+        if (!bufferSource) return;
+        const key = `${siteId}-${radius}`;
+        const existingFeatures = window.currentBufferFeatures.get(key);
+
+        if (existingFeatures) {
+          // 移除缓冲区
+          existingFeatures.forEach(f => bufferSource.removeFeature(f));
+          window.currentBufferFeatures.delete(key);
+          updateBufferButtons(siteId);
+        } else {
+          // 添加缓冲区
+          const feature = createBufferCircle(lon, lat, radius, siteId);
+          if (feature) {
+            bufferSource.addFeature(feature);
+            window.currentBufferFeatures.set(key, [feature]);
+            updateBufferButtons(siteId);
+          }
+        }
+      };
+
+      // 清除某个地块的所有缓冲区
+      window.clearSiteBuffers = function(siteId) {
+        if (!bufferSource) return;
+        for (const [key, features] of window.currentBufferFeatures.entries()) {
+          if (key.startsWith(`${siteId}-`)) {
+            features.forEach(f => bufferSource.removeFeature(f));
+            window.currentBufferFeatures.delete(key);
+          }
+        }
+        updateBufferButtons(siteId);
+      };
+
+      // 清除所有缓冲区
+      window.clearAllBuffers = function() {
+        if (bufferSource) {
+          bufferSource.clear();
+        }
+        window.currentBufferFeatures.clear();
+        // 更新所有缓冲区按钮状态
+        document.querySelectorAll('.buffer-btn').forEach(btn => {
+          if (btn) btn.classList.remove('active');
+        });
+      };
+
+      // 更新缓冲区按钮状态
+      function updateBufferButtons(siteId) {
+        const radii = [1000, 3000, 5000];
+        radii.forEach(radius => {
+          const key = `${siteId}-${radius}`;
+          const btn = document.querySelector(`.buffer-btn-${radius/1000}km[data-site="${siteId}"]`);
+          if (btn) {
+            if (window.currentBufferFeatures.has(key)) {
+              btn.classList.add('active');
+              btn.textContent = `隐藏${radius/1000}km圈`;
+            } else {
+              btn.classList.remove('active');
+              btn.textContent = `${radius/1000}km圈`;
+            }
+          }
+        });
+      }
+
+      // 清除所有缓冲区按钮
+      window.clearAllBuffersBtn = function() {
+        window.clearAllBuffers();
+      };
+
+      // 显示POI标记
+      window.showPOIMarkers = async function(siteIndex, lon, lat) {
+        if (!poiSource) return;
+
+        // 清除之前的POI标记
+        window.clearPOIMarkers();
+
+        currentPoiSiteId = siteIndex;
+
+        try {
+          const resp = await fetch(`/api/poi_details/${siteIndex}`);
+          if (!resp.ok) throw new Error('获取POI数据失败');
+          const data = await resp.json();
+
+          const poiDetails = data.poi_details || {};
+          const typeMapping = {
+            '地铁站': 'subway',
+            '火车站': 'station',
+            '高铁站': 'station',
+            '医院': 'hospital',
+            '高校': 'school',
+            '中小学': 'school',
+            '超市': 'shop',
+            '购物中心': 'shop',
+            '餐饮': 'shop'
+          };
+
+          let markerCount = 0;
+
+          // 为每种POI类型添加标记
+          for (const [cnName, type] of Object.entries(typeMapping)) {
+            const category = poiDetails[cnName];
+            if (category && category.items && Array.isArray(category.items)) {
+              category.items.forEach(item => {
+                if (item.location) {
+                  try {
+                    const [poiLon, poiLat] = item.location.split(',').map(s => parseFloat(s.trim()));
+                    if (!isNaN(poiLon) && !isNaN(poiLat)) {
+                      const feature = new Feature({
+                        geometry: new Point(fromLonLat([poiLon, poiLat])),
+                        poiType: type,
+                        name: item.name || cnName
+                      });
+                      poiSource.addFeature(feature);
+                      markerCount++;
+                    }
+                  } catch (e) {
+                    console.warn('解析POI坐标失败:', item.location, e);
+                  }
+                }
+              });
+            }
+          }
+
+          console.log(`已添加 ${markerCount} 个POI标记`);
+          document.getElementById('poiLegend').style.display = 'block';
+
+          // 缩放地图以显示所有POI标记（安全模式）
+          if (markerCount > 0 && hasMap) {
+            try {
+              const extent = poiSource.getExtent();
+              // 验证extent有效性
+              if (extent && extent.length === 4 &&
+                  !extent.includes(Infinity) && !extent.includes(-Infinity) &&
+                  !extent.includes(NaN)) {
+                // 检查extent范围是否合理
+                const extentWidth = extent[2] - extent[0];
+                const extentHeight = extent[3] - extent[1];
+                if (extentWidth > 0 && extentHeight > 0 && extentWidth < 360 && extentHeight < 180) {
+                  map.getView().fit(extent, { padding: [50, 50, 50, 50], duration: 500, minResolution: 1 });
+                }
+              }
+            } catch (fitError) {
+              console.warn('地图缩放失败，保持当前视图:', fitError);
+            }
+          }
+        } catch (e) {
+          console.error('加载POI数据失败:', e);
+          alert('加载POI数据失败: ' + e.message);
+        }
+      };
+
+      // 清除POI标记
+      window.clearPOIMarkers = function() {
+        if (poiSource) {
+          poiSource.clear();
+        }
+        currentPoiSiteId = null;
+        const legend = document.getElementById('poiLegend');
+        if (legend) legend.style.display = 'none';
+      };
+
+      // 填充满足条件清单
+      window.populateConditionsLists = function(sites, parsedReqs) {
+        if (!sites || !parsedReqs) return;
+
+        const hardConstraints = parsedReqs.hard_constraints || [];
+        const positive = parsedReqs.positive || [];
+        const original = parsedReqs.original || '';
+
+        // 为每个地块生成满足条件标签
+        Object.values(sites).forEach(site => {
+          const container = document.getElementById(`conditions-items-${site.site_index}`);
+          if (!container) return;
+
+          const conditions = [];
+          const name = site.name || '';
+          const scores = site.score_details || {};
+
+          // 检查面积条件（从score_details.area.raw获取）
+          const area = scores.area?.raw || 0;
+          if (area > 0) {
+            conditions.push(`✅ 面积${area >= 10000 ? (area/10000).toFixed(1) + '万㎡' : area.toFixed(0) + '㎡'}`);
+          }
+
+          // 检查区位/区域
+          if (name && typeof name === 'string') {
+            const districts = ['天河区', '海珠区', '越秀区', '荔湾区', '白云区', '番禺区', '黄埔区', '花都区', '南沙区', '增城区', '从化区'];
+            for (const d of districts) {
+              if (name.includes(d)) {
+                conditions.push(`✅ ${d}`);
+                break;
+              }
+            }
+          }
+
+          // 检查交通便利性
+          if (scores.traffic && scores.traffic.normalized >= 6) {
+            conditions.push(`✅ 交通便利(${scores.traffic.normalized.toFixed(1)}分)`);
+          }
+
+          // 检查区位评分
+          if (scores.region && scores.region.normalized >= 7) {
+            conditions.push(`✅ 区位优越(${scores.region.normalized.toFixed(1)}分)`);
+          }
+
+          // 检查性价比评分
+          if (scores.price && scores.price.normalized >= 7) {
+            conditions.push(`✅ 性价比高(${scores.price.normalized.toFixed(1)}分)`);
+          }
+
+          // 检查用户需求关键词
+          if (original) {
+            if ((original.includes('地铁') || original.includes('交通')) && scores.traffic && scores.traffic.normalized >= 5) {
+              conditions.push(`✅ 满足交通要求`);
+            }
+            if (original.includes('大面积') && area >= 20000) {
+              conditions.push(`✅ 大面积地块`);
+            }
+            if (original.includes('核心区') || original.includes('中心')) {
+              const coreDistricts = ['天河区', '越秀区', '海珠区', '荔湾区'];
+              for (const d of coreDistricts) {
+                if (name && name.includes(d)) {
+                  conditions.push(`✅ 核心城区`);
+                  break;
+                }
+              }
+            }
+          }
+
+          if (conditions.length === 0) {
+            container.innerHTML = '<span class="condition-tag">暂无标签</span>';
+          } else {
+            container.innerHTML = conditions.map(c => `<span class="condition-tag">${c}</span>`).join('');
+          }
+        });
+      };
 
       // 渲染需求解析面板
       function renderParsePanel(data) {
@@ -471,6 +949,16 @@
               </div>
             </div>
             <button class="poi-btn" onclick="showPoiDetails(${s.site_index}, '${shortName.replace(/'/g, "\\'")}')">📍 查看周边详情</button>
+            <button class="poi-btn" onclick="showPOIMarkers(${s.site_index}, ${s.lon}, ${s.lat})">🗺️ 地图标记</button>
+            <div class="buffer-btns">
+              <button class="buffer-btn buffer-btn-1km" data-site="${s.site_index}" onclick="toggleBuffer(${s.site_index}, ${s.lon}, ${s.lat}, 1000)">1km圈</button>
+              <button class="buffer-btn buffer-btn-3km" data-site="${s.site_index}" onclick="toggleBuffer(${s.site_index}, ${s.lon}, ${s.lat}, 3000)">3km圈</button>
+              <button class="buffer-btn buffer-btn-5km" data-site="${s.site_index}" onclick="toggleBuffer(${s.site_index}, ${s.lon}, ${s.lat}, 5000)">5km圈</button>
+            </div>
+            <div class="conditions-list" id="conditions-${s.site_index}">
+              <div class="conditions-title">✅ 满足条件</div>
+              <div class="conditions-items" id="conditions-items-${s.site_index}">加载中...</div>
+            </div>
           `;
           
           card.onclick = () => {
@@ -487,9 +975,13 @@
 
       async function run() {
         const btn = document.getElementById('runBtn');
-        btn.disabled = true; 
+        btn.disabled = true;
         btn.textContent = '生成中...';
         if (hasMap) vectorSource.clear();
+        // 清除所有缓冲区
+        window.clearAllBuffers();
+        document.getElementById('bufferLegend').style.display = 'none';
+        document.getElementById('clearBufferBtn').style.display = 'none';
         
         // 隐藏之前的结果
         document.getElementById('parsePanel').classList.remove('show');
@@ -529,6 +1021,11 @@
           // 渲染地块列表
           if (data.sites) {
             renderList(data.sites, data.weights);
+            // 填充满足条件清单
+            window.populateConditionsLists(data.sites, data.parsed_requirements);
+            // 显示缓冲区图例和清除按钮
+            document.getElementById('bufferLegend').style.display = 'block';
+            document.getElementById('clearBufferBtn').style.display = 'block';
           }
           
         } catch (e) {
@@ -539,9 +1036,11 @@
         }
       }
 
+      // 将run函数暴露到window对象上
+      window.run = run;
       document.getElementById('runBtn').onclick = run;
-      document.getElementById('requirements').addEventListener('keydown', (e) => { 
-        if (e.key === 'Enter') run(); 
+      document.getElementById('requirements').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') run();
       });
 
       // 地名搜索
