@@ -1,14 +1,11 @@
 import os
 import json
 import logging
-from flask import Flask, request, jsonify, send_from_directory
+import random
 
-# Import SiteSelector and SimpleProxy
-from flask import Flask, jsonify, request, send_from_directory
-import os
+from flask import Flask, request, jsonify, send_from_directory, Response
 
-from model.site_selector import SiteSelector
-# 替换 SimpleProxy 为支持 base_url 的 OpenaiCall
+from model.area_selector import AreaRecommender
 from model.utils.proxy_call import OpenaiCall
 
 app = Flask(__name__, static_folder='web', static_url_path='/static')
@@ -27,6 +24,7 @@ if os.path.exists(CONFIG_PATH):
     except Exception as e:
         logger.error('加载配置失败: %s', e)
 
+
 def _apply_env_from_config():
     keys = [
         'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'OPENAI_PROXY_BASE',
@@ -39,21 +37,71 @@ def _apply_env_from_config():
         if isinstance(v, str):
             v = v.strip()
         if v:
-            # 配置文件优先，覆盖环境变量
             os.environ[k] = v
             if 'KEY' in k:
                 logger.info('%s 已设置', k)
             else:
                 logger.info('%s=%s', k, v)
 
+
 _apply_env_from_config()
 
-# Serve local OpenLayers ES modules and CSS from the downloaded repository
+# ---------------------------------------------------------------------------
+# Static file serving
+# ---------------------------------------------------------------------------
 OL_SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'openlayers', 'src', 'ol'))
+
 
 @app.route('/static/lib/ol/<path:filename>')
 def serve_openlayers(filename):
     return send_from_directory(OL_SRC_DIR, filename)
+
+
+EXAMPLES_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'openlayers', 'build', 'examples')
+)
+
+
+@app.route('/examples/')
+def serve_examples_index():
+    return send_from_directory(EXAMPLES_DIR, 'index.html')
+
+
+@app.route('/examples/<path:filename>')
+def serve_examples_files(filename):
+    return send_from_directory(EXAMPLES_DIR, filename)
+
+
+@app.route('/theme/<path:filename>')
+def serve_examples_theme(filename):
+    return send_from_directory(os.path.join(EXAMPLES_DIR, 'theme'), filename)
+
+
+@app.route('/resources/<path:filename>')
+def serve_examples_resources(filename):
+    return send_from_directory(os.path.join(EXAMPLES_DIR, 'resources'), filename)
+
+
+@app.route('/examples/data/<path:filename>')
+def serve_examples_data(filename):
+    return send_from_directory(os.path.join(EXAMPLES_DIR, 'data'), filename)
+
+
+# ---------------------------------------------------------------------------
+# Main page
+# ---------------------------------------------------------------------------
+@app.route('/', methods=['GET'])
+def index():
+    return send_from_directory('web', 'index.html')
+
+
+# ---------------------------------------------------------------------------
+# API endpoints
+# ---------------------------------------------------------------------------
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"})
+
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
@@ -64,40 +112,6 @@ def get_config():
     logger.info('配置查询: %s', data)
     return jsonify(data)
 
-from flask import Response
-import random
-
-# ------------------- OpenLayers examples build serving -------------------
-EXAMPLES_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'openlayers', 'build', 'examples'))
-
-@app.route('/examples/')
-def serve_examples_index():
-    return send_from_directory(EXAMPLES_DIR, 'index.html')
-
-@app.route('/examples/<path:filename>')
-def serve_examples_files(filename):
-    return send_from_directory(EXAMPLES_DIR, filename)
-
-@app.route('/theme/<path:filename>')
-def serve_examples_theme(filename):
-    return send_from_directory(os.path.join(EXAMPLES_DIR, 'theme'), filename)
-
-@app.route('/resources/<path:filename>')
-def serve_examples_resources(filename):
-    return send_from_directory(os.path.join(EXAMPLES_DIR, 'resources'), filename)
-
-@app.route('/examples/data/<path:filename>')
-def serve_examples_data(filename):
-    return send_from_directory(os.path.join(EXAMPLES_DIR, 'data'), filename)
-# ------------------------------------------------------------------------
-
-@app.route('/', methods=['GET'])
-def index():
-    return send_from_directory('web', 'index.html')
-
-@app.route('/api/health', methods=['GET'])
-def health():
-    return jsonify({"status": "ok"})
 
 @app.route('/api/geocode', methods=['GET'])
 def geocode():
@@ -136,15 +150,22 @@ def geocode():
             from xyconvert import gcj2wgs
             wgs = gcj2wgs(np.array([[lon_gcj, lat_gcj]]))
             lon_wgs, lat_wgs = float(wgs[0, 0]), float(wgs[0, 1])
-            logger.info('地理编码成功(GCJ->WGS): %s -> (%.6f, %.6f) -> (%.6f, %.6f)', q, lon_gcj, lat_gcj, lon_wgs, lat_wgs)
-            return jsonify({'lon': lon_wgs, 'lat': lat_wgs, 'provider': 'amap', 'coord_in': 'GCJ-02', 'coord_out': 'WGS84'})
+            logger.info('地理编码成功(GCJ->WGS): %s -> (%.6f, %.6f) -> (%.6f, %.6f)',
+                        q, lon_gcj, lat_gcj, lon_wgs, lat_wgs)
+            return jsonify({'lon': lon_wgs, 'lat': lat_wgs,
+                            'provider': 'amap', 'coord_out': 'WGS84'})
         except Exception as conv_e:
             logger.warning('坐标转换失败，回退使用GCJ-02: %s', conv_e)
-            return jsonify({'lon': lon_gcj, 'lat': lat_gcj, 'provider': 'amap', 'coord_out': 'GCJ-02'})
+            return jsonify({'lon': lon_gcj, 'lat': lat_gcj,
+                            'provider': 'amap', 'coord_out': 'GCJ-02'})
     except Exception as e:
         logger.exception('地理编码异常')
         return jsonify({'error': 'server_error', 'detail': str(e)}), 500
 
+
+# ---------------------------------------------------------------------------
+# Tianditu tile proxy
+# ---------------------------------------------------------------------------
 def _proxy_tianditu(T, z, x, y):
     tk = CONFIG.get('TIANDITU_TK') or os.environ.get('TIANDITU_TK') or ''
     if not tk:
@@ -158,7 +179,8 @@ def _proxy_tianditu(T, z, x, y):
         ct = r.headers.get('Content-Type', '')
         if not r.ok or not (ct.startswith('image/') or ct == 'application/octet-stream'):
             body = r.text[:200] if hasattr(r, 'text') else ''
-            logger.error('天地图瓦片异常: status=%s ct=%s body=%s url=%s', r.status_code, ct, body, url)
+            logger.error('天地图瓦片异常: status=%s ct=%s body=%s url=%s',
+                         r.status_code, ct, body, url)
             return jsonify({'error': 'tianditu_error', 'status': r.status_code}), 502
         resp = Response(r.content, mimetype=ct or 'image/png')
         resp.headers['Cache-Control'] = 'public, max-age=604800'
@@ -167,44 +189,38 @@ def _proxy_tianditu(T, z, x, y):
         logger.exception('瓦片代理异常')
         return jsonify({'error': 'server_error', 'detail': str(e)}), 500
 
+
 @app.route('/tiles/vec/<int:z>/<int:x>/<int:y>')
 def tiles_vec(z, x, y):
     return _proxy_tianditu('vec_w', z, x, y)
+
 
 @app.route('/tiles/cva/<int:z>/<int:x>/<int:y>')
 def tiles_cva(z, x, y):
     return _proxy_tianditu('cva_w', z, x, y)
 
-# 影像底图（卫星图）
+
 @app.route('/tiles/img/<int:z>/<int:x>/<int:y>')
 def tiles_img(z, x, y):
     return _proxy_tianditu('img_w', z, x, y)
 
-# 影像注记
+
 @app.route('/tiles/cia/<int:z>/<int:x>/<int:y>')
 def tiles_cia(z, x, y):
     return _proxy_tianditu('cia_w', z, x, y)
 
-@app.route('/api/poi_details/<int:site_index>', methods=['GET'])
-def get_poi_details(site_index):
-    """获取指定地块的POI详情"""
-    try:
-        poi_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'poi_details'))
-        filename = f"site_{site_index:03d}_poi.json"
-        filepath = os.path.join(poi_dir, filename)
-        
-        if not os.path.exists(filepath):
-            logger.warning(f'POI详情文件不存在: {filepath}')
-            return jsonify({'error': 'not_found', 'message': f'地块{site_index}的POI详情不存在'}), 404
-        
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        logger.info(f'获取POI详情: site_index={site_index}')
-        return jsonify(data)
-    except Exception as e:
-        logger.exception('获取POI详情异常')
-        return jsonify({'error': 'server_error', 'detail': str(e)}), 500
+
+# ---------------------------------------------------------------------------
+# Area recommendation API
+# ---------------------------------------------------------------------------
+_recommender = None
+
+
+def _get_recommender():
+    global _recommender
+    if _recommender is None:
+        _recommender = AreaRecommender()
+    return _recommender
 
 
 @app.route('/api/recommendations', methods=['POST'])
@@ -212,46 +228,17 @@ def recommendations():
     try:
         data = request.get_json(force=True)
         requirements = data.get('requirements', '').strip()
-        # 文本权重固定为 1.0
-        w_text = 1.0
-        # 子需求检索候选数量固定为10，最终推荐数量由top_k控制（默认5）
-        min_site_candidate_num = 10  # 每个子需求检索10个候选
-        top_k = int(data.get('top_k', 5))  # 最终推荐5个地块
-        city = data.get('city', 'guangzhou')
-        type_ = data.get('type', 'zh')
-        # 多目标优化开关（默认启用）
-        enable_multi_objective = data.get('enable_multi_objective', True)
+        region = data.get('region', 'all')
+        top_k = int(data.get('top_k', 5))
 
         if not requirements:
             logger.warning('推荐请求缺少需求描述')
             return jsonify({"error": "需求描述不能为空"}), 400
 
-        # 初始化LLM代理（自动选择DeepSeek或OpenAI）
-        try:
-            proxy = OpenaiCall()  # 自动检测并使用DeepSeek（优先）或OpenAI
-        except ValueError as e:
-            logger.error(f'LLM API配置错误: {e}')
-            return jsonify({"error": f"LLM API未配置: {str(e)}"}), 400
-
-        # 使用带POI指标的真实数据CSV（自动生成同名npy）
-        dataset_csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'model', 'data', 'land_transactions_with_poi_v2.csv'))
-
-        selector = SiteSelector(
-            user_reqs=requirements,
-            city=city,
-            min_site_candidate_num=min_site_candidate_num,
-            proxy_call=proxy,
-            type=type_,
-            blend_w_text=w_text,
-            dataset_path=dataset_csv_path,
-            enable_multi_objective=enable_multi_objective,
-            top_k=top_k  # 传入最终推荐数量
-        )
-
-        logger.info('开始生成推荐: city=%s top_k=%s candidate_num=%s', city, top_k, min_site_candidate_num)
-        result = selector.solve()
-        logger.info('推荐生成完成')
-        # result is expected to contain: features (GeoJSON-like), center {lon, lat}, sites list, etc.
+        recommender = _get_recommender()
+        logger.info('开始生成区域推荐: region=%s top_k=%s', region, top_k)
+        result = recommender.recommend(requirements, region=region, top_k=top_k)
+        logger.info('区域推荐完成: %s', result.get('summary', ''))
         return jsonify(result)
 
     except Exception as e:
@@ -259,8 +246,10 @@ def recommendations():
         return jsonify({"error": f"服务端异常: {str(e)}"}), 500
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    # Allow port override via env
     port = int(os.environ.get('PORT', '8001'))
     logger.info('服务启动: port=%d', port)
     app.run(host='0.0.0.0', port=port, debug=True)
